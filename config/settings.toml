@@ -1,0 +1,32 @@
+# Market Analysis — non-secret settings.
+# Secrets live in config/secrets.toml (gitignored).
+
+[mongo]
+uri = "mongodb://localhost:27017"
+database = "MarketAnalysis"
+prototype_database = "MarketAnalysis_Prototype"
+
+[poller]
+# Daily run time (ET, 24h).  Market close + 2h.
+run_time = "18:00"
+timezone = "America/New_York"
+enabled = true
+
+[ia_writer]
+# iCloud path to the iA Writer folder containing theme documents.
+# Leave empty until Phase 5.
+folder = ""
+
+[alpha_vantage]
+base_url = "https://www.alphavantage.co/query"
+# Paid-tier rate limit (requests per minute).  Current tier: 75/min.
+# Override in secrets.toml if the account is upgraded.
+rate_limit_per_minute = 75
+
+[schwab]
+base_url = "https://api.schwabapi.com"
+# OAuth redirect URI registered with Schwab developer portal.
+redirect_uri = "https://127.0.0.1:8182"
+
+[logging]
+level = "INFO"

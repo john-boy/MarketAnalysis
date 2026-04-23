@@ -1,0 +1,40 @@
+[project]
+name = "market-analysis"
+version = "0.1.0"
+description = "Comprehensive portfolio management, market condition analysis, opportunity identification, and risk management."
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [{ name = "Greenthread Companies" }]
+
+dependencies = [
+    "pyside6>=6.8",
+    "pymongo>=4.10",
+    "pyqtgraph>=0.13",
+    "apscheduler>=3.10",
+    "requests>=2.32",
+    "pydantic>=2.9",
+    "markdown>=3.7",
+    "watchdog>=5.0",
+    "python-dateutil>=2.9",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-qt>=4.4",
+    "ruff>=0.7",
+]
+
+[project.scripts]
+market-analysis = "market_analysis.app.main:run"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["market_analysis*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"

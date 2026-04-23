@@ -1,0 +1,181 @@
+"""Daily update orchestrator.
+
+Drives a cost-efficient incremental refresh across one ETF or every
+ETF tracked in the ``etf`` collection.  The key design choice is
+**symbol-union deduplication**: overlapping holdings (AAPL is in SPY
+and QQQ and XLK) incur exactly one price call and one indicator
+recompute per cycle, not one per ETF.
+
+Pipeline:
+
+1. **ETF profile refresh.**  One call per ETF (`ETF_PROFILE`).  Cheap,
+   and catches holding/weight changes.
+2. **Union holdings** across every refreshed ETF into a sorted unique
+   symbol set.
+3. **Incremental prices.**  `ingest_prices(symbol, mode='auto')` — AV
+   ``compact`` window, filtered to ``date > last_stored``.
+4. **Incremental indicators.**  `recompute_for_symbol(symbol,
+   mode='auto')` — append-only for each ``(indicator, stack)``.
+
+Callable from the Admin tab, the scheduled poller, and CLI scripts.
+"""
+
+from __future__ import annotations
+
+import logging
+import time
+from dataclasses import dataclass, field
+from typing import Callable
+
+from market_analysis.data import mongo
+from market_analysis.services import indicators as ind_svc
+from market_analysis.services.ingestors import etf as etf_ingestor
+from market_analysis.services.ingestors import prices as price_ingestor
+from market_analysis.sources.alpha_vantage import AlphaVantageClient, AlphaVantageError
+
+
+log = logging.getLogger(__name__)
+
+# A ``Progress`` hook receives one human-readable line per step.
+Progress = Callable[[str], None]
+
+
+@dataclass
+class DailyReport:
+    etfs_refreshed: list[str] = field(default_factory=list)
+    unique_symbols: int = 0
+    prices_updated: int = 0            # symbols that gained >= 1 bar
+    prices_up_to_date: int = 0         # symbols with no new bars
+    prices_bootstrapped: int = 0       # symbols seeded from empty
+    prices_escalated: int = 0          # gap > 100 days → full refresh
+    indicators_updated: int = 0
+    errors: list[str] = field(default_factory=list)
+    elapsed_sec: float = 0.0
+
+
+def tracked_etfs() -> list[str]:
+    """Return sorted symbols of every ETF we have ingested at least once."""
+    return sorted(mongo.etf().distinct("symbol"))
+
+
+def daily_update(
+    *,
+    etf_symbols: list[str] | None = None,
+    client: AlphaVantageClient | None = None,
+    progress: Progress | None = None,
+    skip_prices: bool = False,
+    skip_indicators: bool = False,
+    limit_symbols: int | None = None,
+) -> DailyReport:
+    """Run the daily pipeline.
+
+    ``etf_symbols=None`` means "every ETF in the ``etf`` collection".
+    Pass a list to narrow the scope (e.g. ``["SPY"]``).
+    ``limit_symbols`` caps the union (for test runs); applied after
+    dedup and sorting.
+    """
+    av = client or AlphaVantageClient()
+    say: Progress = progress or (lambda line: None)
+    report = DailyReport()
+    t0 = time.monotonic()
+
+    # 1. Resolve + refresh ETF profiles -------------------------------
+    if etf_symbols is None:
+        etf_symbols = tracked_etfs()
+    etf_symbols = [s.upper() for s in etf_symbols]
+    if not etf_symbols:
+        say("No tracked ETFs; nothing to do.")
+        report.elapsed_sec = time.monotonic() - t0
+        return report
+
+    say(f"[1/4] Refreshing {len(etf_symbols)} ETF profile(s)…")
+    union: set[str] = set()
+    for sym in etf_symbols:
+        try:
+            rep = etf_ingestor.ingest_etf(sym, client=av)
+            union.update(rep.holding_symbols)
+            report.etfs_refreshed.append(sym)
+            say(f"  {sym}: {rep.holdings_count} holdings")
+        except AlphaVantageError as e:
+            msg = f"{sym}: ETF profile error: {e}"
+            say(f"  {msg}")
+            report.errors.append(msg)
+        except Exception as e:  # noqa: BLE001
+            msg = f"{sym}: unexpected: {e}"
+            log.exception("%s: unexpected ETF ingest error", sym)
+            report.errors.append(msg)
+            say(f"  {msg}")
+
+    # 2. Union deduplication ------------------------------------------
+    symbols = sorted(union)
+    if limit_symbols is not None:
+        symbols = symbols[:limit_symbols]
+    report.unique_symbols = len(symbols)
+    say(f"[2/4] {len(symbols)} unique holding symbols after union.")
+
+    # 3. Incremental prices -------------------------------------------
+    if skip_prices:
+        say("[3/4] Skipping prices.")
+    else:
+        say(f"[3/4] Updating prices (incremental)…")
+        for i, sym in enumerate(symbols, 1):
+            try:
+                r = price_ingestor.ingest_prices(sym, client=av, mode="auto")
+            except AlphaVantageError as e:
+                msg = f"{sym}: price error: {e}"
+                say(f"  [{i:>4}/{len(symbols)}] {msg}")
+                report.errors.append(msg)
+                continue
+            except Exception as e:  # noqa: BLE001
+                msg = f"{sym}: unexpected price error: {e}"
+                log.exception("%s: unexpected price error", sym)
+                report.errors.append(msg)
+                say(f"  [{i:>4}/{len(symbols)}] {msg}")
+                continue
+
+            if r.escalated:
+                report.prices_escalated += 1
+            if r.mode == "full":
+                report.prices_bootstrapped += 1
+                say(f"  [{i:>4}/{len(symbols)}] {sym}: bootstrapped "
+                    f"({r.inserted:,} bars)")
+            elif r.inserted > 0:
+                report.prices_updated += 1
+                say(f"  [{i:>4}/{len(symbols)}] {sym}: "
+                    f"+{r.inserted} bars (→ {r.last_date.date()})")
+            else:
+                report.prices_up_to_date += 1
+                # Keep it quiet — one line per up-to-date symbol is noise.
+
+    # 4. Incremental indicators ---------------------------------------
+    if skip_indicators:
+        say("[4/4] Skipping indicators.")
+    else:
+        say(f"[4/4] Updating indicators (incremental)…")
+        for i, sym in enumerate(symbols, 1):
+            try:
+                r = ind_svc.recompute_for_symbol(sym, mode="auto")
+                added = sum(r.counts.values())
+                if added:
+                    report.indicators_updated += 1
+                    counts = ", ".join(f"{k}=+{v}" for k, v in r.counts.items() if v)
+                    say(f"  [{i:>4}/{len(symbols)}] {sym}: {counts}")
+            except Exception as e:  # noqa: BLE001
+                msg = f"{sym}: indicator error: {e}"
+                log.exception("%s: indicator error", sym)
+                report.errors.append(msg)
+                say(f"  [{i:>4}/{len(symbols)}] {msg}")
+
+    report.elapsed_sec = time.monotonic() - t0
+    say(
+        f"Done in {report.elapsed_sec:.1f}s. "
+        f"ETFs={len(report.etfs_refreshed)} "
+        f"symbols={report.unique_symbols} "
+        f"updated={report.prices_updated} "
+        f"bootstrapped={report.prices_bootstrapped} "
+        f"up-to-date={report.prices_up_to_date} "
+        f"escalated={report.prices_escalated} "
+        f"ind-updated={report.indicators_updated} "
+        f"errors={len(report.errors)}"
+    )
+    return report
