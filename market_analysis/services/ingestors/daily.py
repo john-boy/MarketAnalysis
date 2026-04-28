@@ -29,8 +29,11 @@ from typing import Callable
 
 from market_analysis.data import mongo
 from market_analysis.services import indicators as ind_svc
+from market_analysis.services import panel as panel_svc
 from market_analysis.services.ingestors import etf as etf_ingestor
+from market_analysis.services.ingestors import indexes as index_ingestor
 from market_analysis.services.ingestors import prices as price_ingestor
+from market_analysis.services.ingestors._common import is_tradeable_symbol
 from market_analysis.sources.alpha_vantage import AlphaVantageClient, AlphaVantageError
 
 
@@ -49,6 +52,8 @@ class DailyReport:
     prices_bootstrapped: int = 0       # symbols seeded from empty
     prices_escalated: int = 0          # gap > 100 days → full refresh
     indicators_updated: int = 0
+    indexes_refreshed: list[str] = field(default_factory=list)
+    index_errors: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     elapsed_sec: float = 0.0
 
@@ -65,6 +70,7 @@ def daily_update(
     progress: Progress | None = None,
     skip_prices: bool = False,
     skip_indicators: bool = False,
+    skip_indexes: bool = False,
     limit_symbols: int | None = None,
 ) -> DailyReport:
     """Run the daily pipeline.
@@ -88,7 +94,7 @@ def daily_update(
         report.elapsed_sec = time.monotonic() - t0
         return report
 
-    say(f"[1/4] Refreshing {len(etf_symbols)} ETF profile(s)…")
+    say(f"[1/5] Refreshing {len(etf_symbols)} ETF profile(s)…")
     union: set[str] = set()
     for sym in etf_symbols:
         try:
@@ -107,17 +113,22 @@ def daily_update(
             say(f"  {msg}")
 
     # 2. Union deduplication ------------------------------------------
+    # Drop cash / N.A. placeholders before anything hits AV.  Also fold
+    # the ETF symbols themselves into the panel — SPY/QQQ/etc. are
+    # tradeable in their own right and users expect them charted.
+    union = {s for s in union if is_tradeable_symbol(s)}
+    union.update(etf_symbols)
     symbols = sorted(union)
     if limit_symbols is not None:
         symbols = symbols[:limit_symbols]
     report.unique_symbols = len(symbols)
-    say(f"[2/4] {len(symbols)} unique holding symbols after union.")
+    say(f"[2/5] {len(symbols)} unique holding symbols after union.")
 
     # 3. Incremental prices -------------------------------------------
     if skip_prices:
-        say("[3/4] Skipping prices.")
+        say("[3/5] Skipping prices.")
     else:
-        say(f"[3/4] Updating prices (incremental)…")
+        say(f"[3/5] Updating prices (incremental)…")
         for i, sym in enumerate(symbols, 1):
             try:
                 r = price_ingestor.ingest_prices(sym, client=av, mode="auto")
@@ -147,24 +158,67 @@ def daily_update(
                 report.prices_up_to_date += 1
                 # Keep it quiet — one line per up-to-date symbol is noise.
 
-    # 4. Incremental indicators ---------------------------------------
-    if skip_indicators:
-        say("[4/4] Skipping indicators.")
+    # 4. Index refresh (proxy stamp + direct-mode fetch) -------------
+    direct_index_symbols: list[str] = []
+    if skip_indexes:
+        say("[4/5] Skipping indexes.")
     else:
-        say(f"[4/4] Updating indicators (incremental)…")
-        for i, sym in enumerate(symbols, 1):
-            try:
-                r = ind_svc.recompute_for_symbol(sym, mode="auto")
-                added = sum(r.counts.values())
-                if added:
-                    report.indicators_updated += 1
-                    counts = ", ".join(f"{k}=+{v}" for k, v in r.counts.items() if v)
-                    say(f"  [{i:>4}/{len(symbols)}] {sym}: {counts}")
-            except Exception as e:  # noqa: BLE001
-                msg = f"{sym}: indicator error: {e}"
-                log.exception("%s: indicator error", sym)
-                report.errors.append(msg)
-                say(f"  [{i:>4}/{len(symbols)}] {msg}")
+        tracked = index_ingestor.list_tracked()
+        if not tracked:
+            say("[4/5] No tracked indexes.")
+        else:
+            say(f"[4/5] Refreshing {len(tracked)} index(es)…")
+            for rec in tracked:
+                try:
+                    ir = index_ingestor.ingest_index(rec.symbol, client=av, mode="auto")
+                except Exception as e:  # noqa: BLE001
+                    msg = f"{rec.symbol}: index error: {e}"
+                    log.exception("%s: unexpected index ingest error", rec.symbol)
+                    report.index_errors.append(msg)
+                    say(f"  {msg}")
+                    continue
+                if ir.error:
+                    report.index_errors.append(f"{rec.symbol}: {ir.error}")
+                    say(f"  {rec.symbol} ({ir.mode}): {ir.error}")
+                    continue
+                report.indexes_refreshed.append(rec.symbol)
+                if ir.mode == "proxy":
+                    say(f"  {rec.symbol}: proxy {ir.proxy_symbol} ok")
+                else:
+                    direct_index_symbols.append(rec.symbol)
+                    if ir.inserted:
+                        say(f"  {rec.symbol}: +{ir.inserted} bars "
+                            f"(→ {ir.last_date.date() if ir.last_date else '—'})")
+                    else:
+                        say(f"  {rec.symbol}: up-to-date")
+
+    # 5. Incremental indicators (batched across all symbols) ---------
+    if skip_indicators:
+        say("[5/5] Skipping indicators.")
+    else:
+        # Include direct-mode index symbols (e.g. VIX) so they get
+        # their own RSI/EMA stacks.  Proxy-mode indexes piggyback on
+        # their proxy ETF's computation.
+        panel_symbols = sorted(set(symbols) | set(direct_index_symbols))
+        say(f"[5/5] Updating indicators (batched over {len(panel_symbols)} symbols)…")
+        try:
+            r = panel_svc.recompute_panel(panel_symbols, mode="auto")
+            # Roll up per-symbol insert totals across every (indicator, stack).
+            per_symbol: dict[str, int] = {}
+            for counts in r.counts.values():
+                for sym, n in counts.items():
+                    per_symbol[sym] = per_symbol.get(sym, 0) + n
+            report.indicators_updated = sum(1 for n in per_symbol.values() if n > 0)
+            total = sum(per_symbol.values())
+            say(
+                f"  panel: {r.symbols} symbols × {r.bars} bars → "
+                f"{total:,} docs inserted across {report.indicators_updated} symbols"
+            )
+        except Exception as e:  # noqa: BLE001
+            msg = f"batched indicators: {e}"
+            log.exception("batched indicator recompute failed")
+            report.errors.append(msg)
+            say(f"  {msg}")
 
     report.elapsed_sec = time.monotonic() - t0
     say(
@@ -176,6 +230,7 @@ def daily_update(
         f"up-to-date={report.prices_up_to_date} "
         f"escalated={report.prices_escalated} "
         f"ind-updated={report.indicators_updated} "
-        f"errors={len(report.errors)}"
+        f"indexes={len(report.indexes_refreshed)} "
+        f"errors={len(report.errors) + len(report.index_errors)}"
     )
     return report

@@ -13,6 +13,7 @@ from PySide6.QtWidgets import QMainWindow, QMessageBox, QTabWidget
 
 from market_analysis.app.tabs.admin_tab import AdminTab
 from market_analysis.app.tabs.company_tab import CompanyTab
+from market_analysis.app.tabs.watchlist_tab import WatchlistTab
 from market_analysis.services import queries
 
 
@@ -27,13 +28,17 @@ class MainWindow(QMainWindow):
         self._tabs = QTabWidget(self)
         self._admin = AdminTab(self)
         self._company = CompanyTab(self)
+        self._watchlist = WatchlistTab(self)
 
         self._tabs.addTab(self._admin, "Admin")
         self._tabs.addTab(self._company, "Company")
+        self._tabs.addTab(self._watchlist, "Watchlist")
         self.setCentralWidget(self._tabs)
 
-        # Refresh the Company tab's symbol list whenever an ingest finishes.
+        # Refresh dependent tabs whenever an ingest finishes.
         self._admin.ingest_finished.connect(self._on_ingest_finished)
+        # Double-click a watchlist row → open that symbol on the Company tab.
+        self._watchlist.open_symbol.connect(self._open_symbol_on_company_tab)
 
         self._build_menu()
         self._update_status_bar()
@@ -65,13 +70,20 @@ class MainWindow(QMainWindow):
     def refresh_all(self) -> None:
         self._admin.refresh()
         self._company.refresh_symbols()
+        self._watchlist.refresh()
         self._update_status_bar()
 
     def _on_ingest_finished(self, success: bool, summary: str) -> None:
         self._company.refresh_symbols()
+        self._watchlist.refresh()
         self._update_status_bar()
         msg = ("Ingest complete — " if success else "Ingest failed — ") + summary
         self.statusBar().showMessage(msg, 10_000)
+
+    def _open_symbol_on_company_tab(self, symbol: str) -> None:
+        """Jump to the Company tab and select ``symbol``."""
+        self._company.select_symbol(symbol)
+        self._tabs.setCurrentWidget(self._company)
 
     def _update_status_bar(self) -> None:
         h = queries.db_health()

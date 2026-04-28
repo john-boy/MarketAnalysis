@@ -29,6 +29,7 @@ from market_analysis.data.models.company import Company
 from market_analysis.data.models.etf import ETF, Holding
 from market_analysis.data.models.filing import Filing
 from market_analysis.data.models.indicator import Indicator, IndicatorMeta
+from market_analysis.data.models.market_index import IndexCategory, MarketIndex
 from market_analysis.data.models.news import NewsItem
 from market_analysis.data.models.quote import Quote, QuoteMeta
 from market_analysis.data.models.theme import (
@@ -48,8 +49,10 @@ __all__ = [
     "ETF",
     "Filing",
     "Holding",
+    "IndexCategory",
     "Indicator",
     "IndicatorMeta",
+    "MarketIndex",
     "MongoModel",
     "NewsItem",
     "Position",

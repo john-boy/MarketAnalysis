@@ -57,6 +57,9 @@ INDEXES: dict[str, list[tuple[list[tuple[str, int]], dict]]] = {
     mongo.ETF: [
         ([("symbol", ASCENDING)], {"unique": True, "name": "symbol"}),
     ],
+    mongo.INDEXES: [
+        ([("symbol", ASCENDING)], {"unique": True, "name": "symbol"}),
+    ],
     mongo.THEME_GROUPS: [
         ([("name", ASCENDING)], {"unique": True, "name": "name"}),
     ],
@@ -247,9 +250,10 @@ def run(*, force: bool = False, dry_run: bool = False) -> Report:
 
     # 5. Seed domain fixtures --------------------------------------------
     # Imported lazily so this script stays usable if seeders are broken.
-    from scripts import seed_accounts
+    from scripts import seed_accounts, seed_indexes
 
     report.seeded["accounts"] = seed_accounts.run()["inserted"]
+    report.seeded["indexes"] = seed_indexes.run()["inserted"]
 
     report.elapsed_sec = time.monotonic() - start
     return report

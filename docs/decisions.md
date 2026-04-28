@@ -4,6 +4,50 @@ Short entries. One decision per heading. Newest on top.
 
 ---
 
+## ADR-0009 — Pluggable array backend for indicator math
+
+**Date:** 2026-04-23
+**Decision:** Vectorized indicator math imports the array module
+(``xp``) and dtype constants (``FLOAT``, ``INT``, ``BOOL``) from
+``market_analysis.services.backend`` rather than importing NumPy
+directly.  Backend is selected at import time by the
+``MARKET_ANALYSIS_BACKEND`` env var: ``numpy`` (default) or ``mlx``.
+
+**Why.** The project's goal is mining the DB for market
+opportunities via cross-sectional mathematics (correlation
+matrices, universe-wide scans, relative-strength ranks).  These
+workloads are GPU-friendly on Apple Silicon via MLX (unified memory,
+no CPU↔GPU copy tax).  Making the backend a module-level seam means
+the eventual swap is a one-line environment flip, not a code
+migration — and CI / non-Apple environments keep working on NumPy
+without any conditional code at call sites.
+
+**Constraints this decision imposes on the math layer.**
+- No direct ``import numpy`` in ``indicators_vec`` /
+  ``indicators_cross``.  Any NumPy-specific helper must be wrapped
+  in ``backend.py`` first.
+- Routines must be **purely functional**: no slice assignment, no
+  in-place mutation.  ``mlx.core.array`` is immutable; slice
+  assignment fails at runtime.  Accumulate output rows in a list
+  and ``xp.stack`` at the end.
+- The I/O layer (``panel.py``) stays pure NumPy.  Backend arrays
+  convert to NumPy via ``to_numpy()`` at the Mongo boundary so
+  document serialization never depends on the active backend.
+
+**Precision caveat.** MLX is optimized for float32 on Apple Silicon;
+float64 falls back to CPU.  ``FLOAT`` resolves to ``float32`` under
+MLX and ``float64`` under NumPy.  Parity tolerances for MLX differ
+accordingly (documented in ``tests/test_indicators_cross.py``).
+Workloads requiring strict float64 parity must use the NumPy
+backend.
+
+**Graceful fallback.** If ``MARKET_ANALYSIS_BACKEND=mlx`` is set but
+``mlx`` is not importable, ``backend.py`` logs a warning and uses
+NumPy.  This keeps the codebase runnable on Linux, Windows, Intel
+Macs, and CI without any special-casing at call sites.
+
+---
+
 ## ADR-0008 — Time-series collections for prices and indicators
 
 **Date:** 2026-04-22

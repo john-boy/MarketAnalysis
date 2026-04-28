@@ -17,7 +17,8 @@ def test_all_collections_are_unique():
 
 def test_all_collections_contains_each_name_constant():
     expected = {
-        mongo.COMPANIES, mongo.ETF, mongo.DAILY_QUOTES, mongo.INDICATORS,
+        mongo.COMPANIES, mongo.ETF, mongo.INDEXES,
+        mongo.DAILY_QUOTES, mongo.INDICATORS,
         mongo.THEME_GROUPS, mongo.THEMES, mongo.THEME_DOCUMENTS,
         mongo.WATCHLIST, mongo.ACCOUNTS, mongo.POSITIONS,
         mongo.ACCOUNT_SYNC_LOG, mongo.FILINGS, mongo.NEWS,

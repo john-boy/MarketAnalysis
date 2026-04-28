@@ -16,6 +16,7 @@ dependencies = [
     "markdown>=3.7",
     "watchdog>=5.0",
     "python-dateutil>=2.9",
+    "numpy>=2.0",
 ]
 
 [project.optional-dependencies]
@@ -23,6 +24,12 @@ dev = [
     "pytest>=8.3",
     "pytest-qt>=4.4",
     "ruff>=0.7",
+]
+# Apple Silicon GPU/unified-memory backend for indicator math.  Optional:
+# set MARKET_ANALYSIS_BACKEND=mlx at runtime to activate; falls back to
+# NumPy silently when not installed or not on Apple Silicon.
+gpu = [
+    "mlx>=0.18; platform_system == 'Darwin' and platform_machine == 'arm64'",
 ]
 
 [project.scripts]

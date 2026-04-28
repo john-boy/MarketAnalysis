@@ -273,6 +273,29 @@ class AlphaVantageClient:
             use_cache=use_cache,
         )
 
+    def index_data(
+        self,
+        symbol: str,
+        *,
+        interval: str = "daily",
+        use_cache: bool | None = None,
+    ) -> dict[str, Any]:
+        """``INDEX_DATA`` — daily/weekly/monthly OHLC for a market index.
+
+        Returns a payload shaped like the ``TIME_SERIES_*`` endpoints but
+        with a smaller field set (open/high/low/close; no volume,
+        adjusted close, dividends, or splits).  Used for non-ETF indexes
+        (SPX, VIX, NDX, …) where direct provider data beats a proxy.
+        """
+        return self._get(
+            {
+                "function": "INDEX_DATA",
+                "symbol": symbol,
+                "interval": interval,
+            },
+            use_cache=use_cache,
+        )
+
     def overview(self, symbol: str, *, use_cache: bool | None = None) -> dict[str, Any]:
         """``OVERVIEW`` — company fundamentals (sector, market cap, PE, …)."""
         return self._get(

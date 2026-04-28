@@ -19,6 +19,7 @@ from typing import Any
 
 from market_analysis.data import mongo
 from market_analysis.data.models import ETF, Holding, utcnow
+from market_analysis.services.ingestors._common import is_tradeable_symbol
 from market_analysis.sources.alpha_vantage import AlphaVantageClient
 
 
@@ -45,7 +46,9 @@ def _parse_holdings(raw: Any) -> list[Holding]:
         if not isinstance(item, dict):
             continue
         sym = item.get("symbol") or item.get("Symbol")
-        if not sym:
+        if not is_tradeable_symbol(sym):
+            # Skip cash / N.A. / placeholder "holdings" that AV emits for
+            # unallocated fund buckets — they have no price series.
             continue
         out.append(Holding(
             symbol=sym,
@@ -133,3 +136,27 @@ def ingest_etf(
         companies_upserted=companies_upserted,
         holding_symbols=[h.symbol for h in model.holdings],
     )
+
+
+def list_tracked_etfs() -> list[str]:
+    """Return sorted symbols of every ETF currently in the ``etf`` collection."""
+    return sorted(mongo.etf().distinct("symbol"))
+
+
+def remove_etf(symbol: str) -> bool:
+    """Remove an ETF profile from the ``etf`` collection.
+
+    Does **not** delete the holdings' price history — that data is
+    shared across multiple ETFs and is preserved unless the user
+    explicitly cleans it up.  Company membership lists are trimmed so
+    the removed ETF no longer appears in ``etf_memberships``.
+
+    Returns True iff a row was deleted.
+    """
+    sym = symbol.upper()
+    mongo.companies().update_many(
+        {"etf_memberships": sym},
+        {"$pull": {"etf_memberships": sym}},
+    )
+    res = mongo.etf().delete_one({"symbol": sym})
+    return res.deleted_count > 0

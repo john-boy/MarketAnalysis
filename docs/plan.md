@@ -1,7 +1,7 @@
 # Market Analysis — Rolling Build Plan
 
-**Status:** Phase 1 complete — ready for Phase 2
-**Last revision:** v0.5 (2026-04-22)
+**Status:** Phase 2 in progress — Tickets 2.1, 2.2, 2.3, 2.4, 2.5 complete
+**Last revision:** v0.8 (2026-04-23)
 **This is a living document.** Update as decisions evolve.
 
 ---
@@ -534,6 +534,51 @@ incremental append, up-to-date no-op, and gap-escalation price paths
 plus the two indicator auto-mode paths.  Fake-collection stubs avoid
 a live Mongo.
 
+### Ticket 1.8 — Batched indicator engine + GPU backend seam ✅
+
+Re-engineered the indicator pipeline from per-symbol Python loops to
+batched tensor math across all symbols, with a pluggable array
+backend so Apple-GPU acceleration (MLX) can be toggled on without
+touching call sites.  Motivated by the project goal of mining the
+MongoDB corpus for market opportunities via cross-sectional
+mathematics.  See [docs/ticket_1_8.md](ticket_1_8.md) for the full
+writeup; see ADR-0009 for the backend-abstraction rationale.
+
+**Headline changes.**
+- New `services/backend.py` (array-backend indirection) —
+  `MARKET_ANALYSIS_BACKEND=numpy|mlx` selects NumPy (default, CPU)
+  or MLX (Apple Silicon GPU).  Silent fallback to NumPy when MLX
+  isn't installed.
+- New `services/indicators_vec.py` — vectorized `ema_panel` /
+  `rsi_panel` over a dense `(T, N)` panel.  Purely functional
+  (required for MLX's immutable arrays).
+- New `services/indicators_cross.py` — cross-sectional primitives:
+  `relative_rsi_panel`, `cross_rank_panel`,
+  `load_constituents_vs_index_panel`.  First step toward Phase 7-
+  style opportunity scans.
+- New `services/panel.py` — bulk load (one Mongo query) + bulk write
+  (single `delete_many` + `insert_many` per indicator/stack) replace
+  the per-symbol round trips.
+- `services/ingestors/daily.py` step [4/4] now calls
+  `recompute_panel(symbols)` once instead of looping
+  `recompute_for_symbol` across 200–300 symbols.
+- `numpy>=2.0` required; `mlx>=0.18` optional via `gpu` extra on
+  Apple Silicon.
+- `run-numpy.sh` / `run-mlx.sh` launchers at the repo root.
+
+**Tests.** `tests/test_indicators_parity.py` (16 tests) asserts the
+batched output matches the scalar reference to 1e-9 (EMA) / 1e-6
+(RSI) on synthetic walks and NaN-gap panels — locking the scalar
+implementations as the parity ground truth.
+`tests/test_indicators_cross.py` (9 tests) covers the cross-sectional
+primitives plus an MLX end-to-end round-trip (skipped when MLX isn't
+installed).  All 83 tests pass; no existing test modified.
+
+**Invariants.** Vectorized math must import from `services.backend`
+(never NumPy directly) and must be purely functional.  `panel.py` is
+the I/O boundary and stays on NumPy; backend arrays convert via
+`to_numpy()` before Mongo serialization.
+
 ## 10. Open items / blockers
 
 | Item | Status |
@@ -545,6 +590,98 @@ a live Mongo.
 
 ## 11. Revision log
 
+- **v1.0** (2026-04-24) — Ticket 2.5 closed: ingest model overhaul
+  driven by end-to-end test feedback.  Six discrete changes:
+  (1) **Chart regression fix** — the price/EMA traces dropped off
+  after the 2.4 rework; `_redraw` now re-enables Y auto-range after
+  `clear()` so the window-aware `setAutoVisible(y=True)` has an axis
+  to operate on.
+  (2) **Non-tradeable skip list** — a shared `is_tradeable_symbol`
+  filters AV placeholders (`n/a`, `cash`, `USD`, `OTHER`, `-`, …) at
+  every entry point (holdings parser, price ingestor, daily union),
+  so cash-buffer "holdings" no longer burn AV budget or pollute the
+  error log.
+  (3) **INDEX_DATA endpoint** — new
+  `AlphaVantageClient.index_data(symbol, interval)` plus a dedicated
+  `_parse_index_daily` (OHLC + candle; no adjusted / volume / splits).
+  Direct-mode indexes always route through this — previously, when
+  `fetch_symbol == canonical` we fell back to
+  `TIME_SERIES_DAILY_ADJUSTED`, which returns errors for real indexes.
+  (4) **Major indexes default to direct fetch** — seed data now lists
+  SPX / NDX / DJI / VIX with `fetch_symbol` (not proxy); users get
+  actual index marks instead of an ETF stand-in.  The `proxy_symbol`
+  pathway is retained for cases where AV has no coverage.
+  (5) **ETF ticker priced as a symbol** — SPY / QQQ / etc. are now
+  folded into the daily-pipeline union and into the FullRefreshWorker
+  targets alongside their holdings, so the ETF itself gets charted.
+  (6) **Ingest vs Re-ingest semantics** — `FullRefreshWorker` and
+  `IndexIngestWorker` accept a `reingest` flag; adding a new ETF
+  defaults to *incremental* (skip holdings that already have price
+  history), and the Admin ETFs/Indexes tabs expose both actions as
+  separate buttons with explanatory tooltips.
+  Test suite: 124 passing (8 new covering the INDEX_DATA path,
+  non-tradeable filter, and direct-mode routing invariant).
+- **v0.9** (2026-04-24) — Ticket 2.4 closed: Company-tab chart range
+  honing.  The prior bug — zooming in on the price plot pushed recent
+  bars off-screen — was caused by ``enableAutoRange(axis="y")`` fighting
+  the user's view interaction after every redraw.  Fix: configure the
+  price plot's ViewBox with ``setAutoVisible(y=True)`` once at build
+  time so Y auto-scaling tracks only the traces currently inside the
+  X window.  Added a quick-range toolbar (1M / 3M / 6M / 1Y / 2Y / 5Y
+  / All) above the chart and a default 1Y window on symbol load (falls
+  back to full range when fewer bars are available).  The range math
+  lives in a pure staticmethod `CompanyTab._x_window_bounds` so it is
+  unit-testable without a live ViewBox; five new tests cover the edge
+  cases (empty quotes, `None`, oversized window, normal slice,
+  non-positive input).  Test suite: 116 passing.
+- **v0.8** (2026-04-23) — Ticket 2.3 closed: Company-tab fundamentals
+  display.  The AV ``OVERVIEW`` endpoint was wired in for the first
+  time via a new `services/ingestors/fundamentals.py`
+  (`ingest_fundamentals()` with a parser that coerces AV's
+  string-typed payloads to native numeric / date types and preserves
+  unknown keys untouched).  `companies.fundamentals` now holds the
+  full blob; convenience top-level fields (`sector`, `industry`,
+  `exchange`, …) are mirrored for fast filtering.
+  `queries.load_fundamentals_view()` shapes the blob into six
+  sections — Identity / Valuation / Profitability / Dividend /
+  Trading / Analyst — each a list of ``(label, formatted_value)``
+  rows (missing values rendered as ``"—"`` so the grid doesn't
+  collapse).  The Company tab's old "Raw" pane is gone; in its place
+  a scrollable grid of six sub-groupboxes plus an ETF-membership
+  strip and a prose Description panel.  A "Fetch fundamentals"
+  button on the Company tab dispatches the ingest on a `QThread`
+  via a new `FundamentalsWorker`.  Nine new tests cover the parser,
+  throttle/empty skip paths, end-to-end dispatch, and the view-model
+  formatter.
+- **v0.7** (2026-04-23) — Tickets 2.1 and 2.2 closed.
+  **2.1: Admin tab rework + Index data.** New `indexes` collection
+  and `MarketIndex` model supporting both *proxy* mode (SPX→SPY —
+  no duplicate storage) and *direct* mode (VIX — own fetch,
+  optionally aliased for provider-ticker differences).  Seed script
+  covers SPX / NDX / DJI / VIX.  `daily_update` gains a [4/5] index
+  step that refreshes every tracked index and folds direct-mode
+  symbols into the indicator panel union so they get their own
+  RSI/EMA stacks.  Admin tab restructured: right pane is now a
+  `QTabWidget` (Daily | Full refresh | ETFs | Indexes) over a
+  collapsible log — ETFs and Indexes panels expose add / re-ingest
+  / remove inline.  Motivation: Quant/ML dataset extraction needs
+  first-class index support.
+  **2.2: Watchlist tab.** Table of tracked tickers with themes,
+  ingest-tags, source-of-origin, added/edited dates, and last-bar
+  freshness (red when no price data exists).  New
+  `services/watchlist.py` (add/remove/update) and
+  `queries.list_watchlist()` enriched with `last_quote_date`.
+  Double-clicking a row jumps to the Company tab and selects that
+  symbol (cross-tab nav wired via a new `open_symbol` signal plus
+  `CompanyTab.select_symbol()`).
+- **v0.6** (2026-04-23) — Ticket 1.8 closed: batched indicator engine
+  with pluggable array backend.  Per-symbol indicator loop replaced
+  by a single `recompute_panel` call over a dense `(T, N)` price
+  matrix; MLX (Apple GPU) selectable via
+  `MARKET_ANALYSIS_BACKEND=mlx` with graceful NumPy fallback.  New
+  cross-sectional primitives (`relative_rsi_panel`,
+  `cross_rank_panel`) lay groundwork for universe-wide opportunity
+  scans.  See ADR-0009 for the backend seam.
 - **v0.5** (2026-04-22) — Ticket 1.7 closed: incremental daily ops
   (price + indicator append-only with gap escalation), union-deduped
   daily orchestrator across tracked ETFs, Admin tab split into

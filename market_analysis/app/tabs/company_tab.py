@@ -4,34 +4,38 @@ Left: filterable list of symbols present in ``daily_quotes``.
 Right: a stacked chart with a price panel (adjusted close + three
 EMA overlays) and a linked RSI panel below it (0-100, 30/70 lines);
 a visibility toggle row above the chart controls which traces are
-drawn.  Fundamentals form + raw-JSON pane round out the right side.
+drawn.  Below the chart, a scrollable **Fundamentals** display
+breaks the AV ``OVERVIEW`` payload into sectioned panels (Identity,
+Valuation, Profitability, Dividend, Trading, Analyst) with a
+"Fetch fundamentals" button that ingests on demand.
 
 Filings and news panels arrive in later phases.
 """
 
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Any
-
 import pyqtgraph as pg
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QThread
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QCheckBox,
     QFormLayout,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
-    QPlainTextEdit,
+    QPushButton,
+    QScrollArea,
     QSplitter,
+    QTextBrowser,
     QVBoxLayout,
     QWidget,
 )
 
+from market_analysis.app.widgets.ingest_worker import FundamentalsWorker
 from market_analysis.services import queries
 
 
@@ -50,6 +54,22 @@ _RSI_PEN = pg.mkPen("#c084fc", width=2)             # violet-400
 _GUIDE_PEN = pg.mkPen("#6b7280", width=1, style=Qt.PenStyle.DashLine)  # gray guides
 
 
+# Quick-range toolbar presets.  ``None`` means "show all bars".
+# Trading-day approximations: 21/63/126/252/504/1260 bars.
+_RANGE_PRESETS: list[tuple[str, int | None]] = [
+    ("1M", 21),
+    ("3M", 63),
+    ("6M", 126),
+    ("1Y", 252),
+    ("2Y", 504),
+    ("5Y", 1260),
+    ("All", None),
+]
+
+# Default window applied on symbol load.
+_DEFAULT_WINDOW_BARS = 252
+
+
 class CompanyTab(QWidget):
     """Per-ticker chart + fundamentals view."""
 
@@ -61,6 +81,13 @@ class CompanyTab(QWidget):
         # Cached series for the current symbol (so toggling visibility is cheap).
         self._quotes: list = []
         self._ema_rows: list = []
+
+        # Fundamentals worker state.
+        self._fund_thread: QThread | None = None
+        self._fund_worker: FundamentalsWorker | None = None
+        # Labels for each fundamentals section — reused so refreshes
+        # just mutate text instead of tearing down layouts.
+        self._section_labels: dict[str, list[QLabel]] = {}
 
         root = QHBoxLayout(self)
         splitter = QSplitter(Qt.Orientation.Horizontal, self)
@@ -128,11 +155,29 @@ class CompanyTab(QWidget):
         toggles.addStretch(1)
         layout.addLayout(toggles)
 
+        # Quick X-range toolbar (1M / 3M / 6M / 1Y / 2Y / 5Y / All).
+        # Each button calls ``_set_x_window(days)`` — or None for "All".
+        range_row = QHBoxLayout()
+        range_row.addWidget(QLabel("Range:"))
+        for label, days in _RANGE_PRESETS:
+            btn = QPushButton(label)
+            btn.setFixedWidth(48)
+            btn.clicked.connect(lambda _=False, d=days: self._set_x_window(d))
+            range_row.addWidget(btn)
+        range_row.addStretch(1)
+        layout.addLayout(range_row)
+
         # Chart — price panel on top, RSI panel linked below.
         self._chart = pg.GraphicsLayoutWidget()
         self._price_plot = self._chart.addPlot(row=0, col=0, axisItems={"bottom": pg.DateAxisItem()})
         self._price_plot.showGrid(x=True, y=True, alpha=0.25)
         self._price_plot.addLegend(offset=(10, 10))
+        # Auto-scale Y to traces inside the current X window — this is what
+        # makes zoom/pan keep the visible series framed, instead of pyqtgraph
+        # auto-fitting Y to the global data range (which pushes recent bars
+        # off-screen after you zoom in on a subset).
+        self._price_plot.getViewBox().setAutoVisible(y=True)
+        self._price_plot.enableAutoRange(axis="y")
 
         self._rsi_plot = self._chart.addPlot(row=1, col=0, axisItems={"bottom": pg.DateAxisItem()})
         self._rsi_plot.showGrid(x=True, y=True, alpha=0.25)
@@ -144,21 +189,79 @@ class CompanyTab(QWidget):
 
         layout.addWidget(self._chart, 3)
 
-        # Fundamentals
-        fund = QGroupBox("Fundamentals")
-        self._fund_form = QFormLayout(fund)
-        self._fund_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-        layout.addWidget(fund, 1)
+        # Fundamentals (sectioned, scrollable)
+        layout.addWidget(self._build_fundamentals_panel(), 2)
 
-        # Raw pane
-        raw = QGroupBox("Raw")
-        rg = QVBoxLayout(raw)
-        self._raw = QPlainTextEdit()
-        self._raw.setReadOnly(True)
-        self._raw.setFont(QFont("Menlo", 10))
-        rg.addWidget(self._raw)
-        layout.addWidget(raw, 1)
+        return box
 
+    def _build_fundamentals_panel(self) -> QWidget:
+        outer = QGroupBox("Fundamentals")
+        ol = QVBoxLayout(outer)
+
+        # Header row: AV-populated name + status + fetch button.
+        head = QHBoxLayout()
+        self._fund_name_lbl = QLabel("—")
+        f = QFont(); f.setBold(True); f.setPointSize(12)
+        self._fund_name_lbl.setFont(f)
+        head.addWidget(self._fund_name_lbl, 1)
+        self._fund_status_lbl = QLabel("")
+        self._fund_status_lbl.setStyleSheet("color: #9ca3af;")
+        head.addWidget(self._fund_status_lbl)
+        self._fetch_btn = QPushButton("Fetch fundamentals")
+        self._fetch_btn.clicked.connect(self._on_fetch_fundamentals)
+        head.addWidget(self._fetch_btn)
+        ol.addLayout(head)
+
+        # Scroll area for the section grid + description.
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+
+        grid = QGridLayout()
+        grid.addWidget(self._build_section("identity",      "Identity"),      0, 0)
+        grid.addWidget(self._build_section("valuation",     "Valuation"),     0, 1)
+        grid.addWidget(self._build_section("profitability", "Profitability"), 1, 0)
+        grid.addWidget(self._build_section("dividend",      "Dividend"),      1, 1)
+        grid.addWidget(self._build_section("trading",       "Trading"),       2, 0)
+        grid.addWidget(self._build_section("analyst",       "Analyst"),       2, 1)
+        content_layout.addLayout(grid)
+
+        # ETF memberships (simple chip row).
+        self._etf_lbl = QLabel("")
+        self._etf_lbl.setWordWrap(True)
+        self._etf_lbl.setStyleSheet("color: #9ca3af; margin-top: 4px;")
+        content_layout.addWidget(self._etf_lbl)
+
+        # Company description as prose.
+        desc_group = QGroupBox("Description")
+        dl = QVBoxLayout(desc_group)
+        self._desc = QTextBrowser()
+        self._desc.setOpenExternalLinks(True)
+        self._desc.setMinimumHeight(80)
+        dl.addWidget(self._desc)
+        content_layout.addWidget(desc_group, 1)
+
+        scroll.setWidget(content)
+        ol.addWidget(scroll, 1)
+
+        return outer
+
+    def _build_section(self, key: str, title: str) -> QGroupBox:
+        """Build an empty (label, value) grid for a fundamentals section.
+
+        Labels are stored in ``self._section_labels[key]`` so
+        :meth:`_draw_fundamentals` only mutates text — no re-layout.
+        The section is populated lazily on the first draw.
+        """
+        box = QGroupBox(title)
+        form = QFormLayout(box)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        form.setFormAlignment(Qt.AlignmentFlag.AlignTop)
+        form.setContentsMargins(8, 8, 8, 8)
+        # Store the form so the first draw can populate it.
+        box.setProperty("form", form)
+        self._section_labels[key] = []
         return box
 
     # -- Public slots --------------------------------------------------
@@ -166,6 +269,27 @@ class CompanyTab(QWidget):
     def refresh_symbols(self) -> None:
         self._all_symbols = queries.list_symbols_with_quotes()
         self._apply_filter(self._filter.text())
+
+    def select_symbol(self, symbol: str) -> None:
+        """Programmatically select ``symbol`` and load its data.
+
+        Used by cross-tab navigation (e.g. double-click from the
+        Watchlist tab).  If the symbol isn't in the current filter,
+        the filter is cleared first so it becomes visible.
+        """
+        sym = symbol.upper()
+        if sym not in self._all_symbols:
+            self._load(sym)
+            return
+        # Clear filter if it would hide the target row.
+        if self._filter.text() and sym.find(self._filter.text().upper()) < 0:
+            self._filter.clear()
+        for i in range(self._list.count()):
+            item = self._list.item(i)
+            if item and item.text() == sym:
+                self._list.setCurrentItem(item)
+                return
+        self._load(sym)
 
     # -- Internals -----------------------------------------------------
 
@@ -196,7 +320,45 @@ class CompanyTab(QWidget):
         self._rsi_rows = queries.load_rsi(symbol, stack=0)
 
         self._redraw()
+        # Default to roughly the last trading year on load; falls back to
+        # full range when fewer bars are available.
+        self._set_x_window(_DEFAULT_WINDOW_BARS)
         self._draw_fundamentals(symbol)
+
+    # -- Chart range control -------------------------------------------
+
+    def _set_x_window(self, n_bars: int | None) -> None:
+        """Set the price plot's X window to the last ``n_bars`` bars.
+
+        ``n_bars=None`` resets to full range.  The RSI plot is X-linked
+        and follows automatically; Y ranges on both plots re-auto-scale
+        to the visible slice thanks to ``setAutoVisible(y=True)``.
+        """
+        bounds = self._x_window_bounds(self._quotes, n_bars)
+        if bounds is None:
+            self._price_plot.enableAutoRange(axis="x")
+            return
+        start, end = bounds
+        self._price_plot.setXRange(start, end, padding=0.02)
+
+    @staticmethod
+    def _x_window_bounds(
+        quotes: list, n_bars: int | None
+    ) -> tuple[float, float] | None:
+        """Return ``(start_ts, end_ts)`` for the last ``n_bars`` of ``quotes``.
+
+        Returns ``None`` when the whole range should be shown (no quotes,
+        ``n_bars`` is ``None``, or ``n_bars`` covers everything).  Used by
+        :meth:`_set_x_window`; factored out so the slicing logic is unit
+        testable without a live pyqtgraph ViewBox.
+        """
+        if not quotes or n_bars is None or n_bars <= 0:
+            return None
+        if n_bars >= len(quotes):
+            return None
+        start = quotes[-n_bars].date.timestamp()
+        end = quotes[-1].date.timestamp()
+        return (start, end)
 
     # -- Chart drawing -------------------------------------------------
 
@@ -245,84 +407,124 @@ class CompanyTab(QWidget):
             ry = [r.value for r in self._rsi_rows]
             self._rsi_plot.plot(rx, ry, pen=_RSI_PEN, name="RSI 14")
 
+        # Re-enable Y auto-range after ``clear()``; ``setAutoVisible(y=True)``
+        # (configured once at build time) scopes the auto-range to samples
+        # inside the current X window, so zoom/pan still behaves.  Without
+        # this call the price panel stays at its stale Y range and traces
+        # render off-screen.
+        self._price_plot.enableAutoRange(axis="y")
+        self._rsi_plot.enableAutoRange(axis="y")
+
         first = self._quotes[0].date.date()
         last = self._quotes[-1].date.date()
         self._range_lbl.setText(f"{first} → {last}  ({len(self._quotes):,} bars)")
 
     def _draw_fundamentals(self, symbol: str) -> None:
-        while self._fund_form.rowCount():
-            self._fund_form.removeRow(0)
+        view = queries.load_fundamentals_view(symbol)
 
-        company = queries.load_company(symbol) or {}
-        etf = queries.load_etf(symbol)
-
-        shown = False
-        for key in ("name", "sector", "industry", "exchange", "country",
-                    "currency", "cik", "fiscal_year_end"):
-            val = company.get(key)
-            if val:
-                self._fund_form.addRow(key.replace("_", " ").title() + ":",
-                                       QLabel(str(val)))
-                shown = True
-        if company.get("etf_memberships"):
-            self._fund_form.addRow("ETF Memberships:",
-                                   QLabel(", ".join(company["etf_memberships"])))
-            shown = True
-
-        if etf:
-            self._fund_form.addRow("ETF Provider:", QLabel(str(etf.get("provider") or "—")))
-            self._fund_form.addRow(
-                "ETF Expense Ratio:",
-                QLabel("—" if etf.get("expense_ratio") is None
-                       else f"{etf['expense_ratio']:.4%}"),
-            )
-            self._fund_form.addRow("ETF Holdings:",
-                                   QLabel(f"{len(etf.get('holdings', []))}"))
-            shown = True
-
-        if not shown:
-            self._fund_form.addRow("", QLabel("No fundamentals on file."))
-
-        payload: dict[str, Any] = {}
-        if company:
-            payload["companies"] = _truncate_for_display(company)
-        if etf:
-            payload["etf"] = _truncate_for_display(etf)
-        self._raw.setPlainText(_pretty(payload) if payload else "—")
-
-
-# -- Helpers --------------------------------------------------------------
-
-
-def _truncate_for_display(doc: dict[str, Any]) -> dict[str, Any]:
-    out: dict[str, Any] = {}
-    for k, v in doc.items():
-        if isinstance(v, list) and len(v) > 5:
-            out[k] = v[:5] + [f"… {len(v) - 5} more"]
-        elif isinstance(v, dict) and len(v) > 10:
-            items = list(v.items())[:10]
-            out[k] = dict(items) | {"__truncated__": f"{len(v) - 10} more keys"}
-        elif isinstance(v, datetime):
-            out[k] = v.isoformat()
+        self._fund_name_lbl.setText(view.name or symbol)
+        if view.has_data:
+            self._fund_status_lbl.setText("")
         else:
-            out[k] = v
-    return out
+            self._fund_status_lbl.setText("No AV OVERVIEW ingested yet")
+
+        sections = {
+            "identity": view.identity,
+            "valuation": view.valuation,
+            "profitability": view.profitability,
+            "dividend": view.dividend,
+            "trading": view.trading,
+            "analyst": view.analyst,
+        }
+        for key, rows in sections.items():
+            self._populate_section(key, rows)
+
+        # ETF membership chips — helpful context for equity tickers.
+        etf_doc = queries.load_etf(symbol)
+        memberships = view.etf_memberships
+        if memberships:
+            self._etf_lbl.setText("ETF memberships: " + ", ".join(memberships))
+        elif etf_doc:
+            provider = etf_doc.get("provider") or "—"
+            ratio = etf_doc.get("expense_ratio")
+            ratio_s = f"{ratio:.2%}" if ratio is not None else "—"
+            holdings_n = len(etf_doc.get("holdings", []))
+            self._etf_lbl.setText(
+                f"This symbol is an ETF — provider: {provider}  ·  "
+                f"expense ratio: {ratio_s}  ·  {holdings_n} holdings"
+            )
+        else:
+            self._etf_lbl.setText("")
+
+        # Description as plain (non-HTML) prose — safer given AV strings.
+        desc = view.description or ""
+        self._desc.setPlainText(desc or "(no description on file)")
+
+    def _populate_section(
+        self, key: str, rows: list[tuple[str, str]]
+    ) -> None:
+        """Replace the section's form rows with ``rows`` (label, value)."""
+        # Locate the form stashed on the groupbox.
+        box = self._section_groupbox(key)
+        form: QFormLayout = box.property("form")
+        while form.rowCount():
+            form.removeRow(0)
+        for label, value in rows:
+            vlab = QLabel(value)
+            vlab.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            form.addRow(label + ":", vlab)
+
+    def _section_groupbox(self, key: str) -> QGroupBox:
+        """Find the groupbox created by ``_build_section(key, …)``."""
+        # We stored the form on the box via setProperty; the box is
+        # the only groupbox whose ``form`` property matches.  Simpler
+        # is to iterate the grid children, but we kept a handle on
+        # each box indirectly via the form.  Walk the widget tree.
+        for box in self.findChildren(QGroupBox):
+            f = box.property("form")
+            if f is not None and self._section_labels_key(box) == key:
+                return box
+        raise KeyError(key)
+
+    def _section_labels_key(self, box: QGroupBox) -> str | None:
+        """Map a groupbox back to its section key (by title, case-folded)."""
+        mapping = {
+            "Identity": "identity",
+            "Valuation": "valuation",
+            "Profitability": "profitability",
+            "Dividend": "dividend",
+            "Trading": "trading",
+            "Analyst": "analyst",
+        }
+        return mapping.get(box.title())
+
+    # -- Fundamentals fetch --------------------------------------------
+
+    def _on_fetch_fundamentals(self) -> None:
+        if self._current_symbol is None or self._fund_thread is not None:
+            return
+        sym = self._current_symbol
+        self._fetch_btn.setEnabled(False)
+        self._fund_status_lbl.setText("fetching…")
+
+        self._fund_thread = QThread(self)
+        self._fund_worker = FundamentalsWorker(sym, cache=True)
+        self._fund_worker.moveToThread(self._fund_thread)
+        self._fund_thread.started.connect(self._fund_worker.run)
+        self._fund_worker.done.connect(self._on_fundamentals_done)
+        self._fund_thread.start()
+
+    def _on_fundamentals_done(self, success: bool, summary: str) -> None:
+        if self._fund_thread is not None:
+            self._fund_thread.quit()
+            self._fund_thread.wait()
+        self._fund_thread = None
+        self._fund_worker = None
+        self._fetch_btn.setEnabled(True)
+        self._fund_status_lbl.setText(
+            "" if success else f"fetch failed: {summary}"
+        )
+        if success and self._current_symbol is not None:
+            self._draw_fundamentals(self._current_symbol)
 
 
-def _pretty(obj: Any, indent: int = 0) -> str:
-    pad = "  " * indent
-    if isinstance(obj, dict):
-        lines = [pad + "{"]
-        for k, v in obj.items():
-            lines.append(f"{pad}  {k!r}: {_pretty_inline(v)}")
-        lines.append(pad + "}")
-        return "\n".join(lines)
-    return _pretty_inline(obj)
-
-
-def _pretty_inline(v: Any) -> str:
-    if isinstance(v, dict):
-        return "{" + ", ".join(f"{k!r}: {_pretty_inline(x)}" for k, x in v.items()) + "}"
-    if isinstance(v, list):
-        return "[" + ", ".join(_pretty_inline(x) for x in v) + "]"
-    return repr(v)

@@ -30,6 +30,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from market_analysis.data import mongo
+from market_analysis.services.ingestors._common import is_tradeable_symbol
 from market_analysis.sources.alpha_vantage import AlphaVantageClient
 
 
@@ -50,6 +51,20 @@ _AV_FIELDS = {
     "7. dividend amount":    ("dividend",          float),
     "8. split coefficient":  ("split_coefficient", float),
 }
+
+
+def _extract_daily_series(payload: dict[str, Any]) -> dict[str, Any]:
+    """Return the inner time-series dict from an AV daily payload.
+
+    AV uses a few different wrapper keys across endpoints (``Time Series
+    (Daily)`` for TIME_SERIES_DAILY_ADJUSTED and INDEX_DATA; ``data``
+    occasionally).  This helper finds whichever one is present.
+    """
+    for key in ("Time Series (Daily)", "data", "Time Series (Index)"):
+        v = payload.get(key)
+        if isinstance(v, dict) and v:
+            return v
+    return {}
 
 
 def _parse_daily_adjusted(
@@ -84,6 +99,82 @@ def _parse_daily_adjusted(
     return docs
 
 
+# Alpha Vantage ``INDEX_DATA`` field mapping.  Unlike the equities
+# ``TIME_SERIES_*`` endpoints, INDEX_DATA returns a *list* of records
+# under a top-level ``data`` key, with bare field names (no "1. open"
+# numeric prefix).  OHLC only — no volume / dividend / adjusted-close.
+_AV_INDEX_FIELDS = {
+    "open":   ("open",   float),
+    "high":   ("high",   float),
+    "low":    ("low",    float),
+    "close":  ("close",  float),
+    "volume": ("volume", float),  # tolerated if AV starts emitting it
+}
+
+
+def _parse_index_daily(
+    payload: dict[str, Any], symbol: str, source: str = "alpha_vantage",
+) -> list[dict[str, Any]]:
+    """Translate an AV ``INDEX_DATA`` payload into ``daily_quotes`` docs.
+
+    Accepts both AV INDEX_DATA shapes:
+
+    * Current production shape::
+
+        {"symbol": "VIX", "interval": "daily",
+         "data": [{"date": "2026-04-23", "open": "19.42", ...}, ...]}
+
+    * Legacy/compat shape (Time Series keyed by date) — kept so
+      cassettes/tests written against the older format still parse.
+
+    Rows end up identical to :func:`_parse_daily_adjusted` output so
+    index quotes sit side by side with equity quotes in ``daily_quotes``.
+    """
+    rows: list[dict[str, Any]] = []
+    data = payload.get("data")
+    if isinstance(data, list) and data:
+        rows = [r for r in data if isinstance(r, dict)]
+    else:
+        # Legacy: date-keyed dict.  Convert to the list shape.
+        series = _extract_daily_series(payload)
+        for date_str, row in series.items():
+            if isinstance(row, dict):
+                merged = {"date": date_str}
+                # Map "1. open" → "open", etc.
+                for k, v in row.items():
+                    parts = k.split(". ", 1)
+                    merged[parts[-1]] = v
+                rows.append(merged)
+
+    docs: list[dict[str, Any]] = []
+    for row in rows:
+        date_str = row.get("date")
+        if not isinstance(date_str, str):
+            continue
+        try:
+            date = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+        doc: dict[str, Any] = {
+            "date": date,
+            "metadata": {"symbol": symbol, "source": source},
+        }
+        for av_key, (target_key, caster) in _AV_INDEX_FIELDS.items():
+            raw = row.get(av_key)
+            if raw is None:
+                continue
+            try:
+                doc[target_key] = caster(raw)
+            except (TypeError, ValueError):
+                continue
+        if "open" in doc and "close" in doc:
+            doc["candle"] = doc["close"] - doc["open"]
+        docs.append(doc)
+
+    docs.sort(key=lambda d: d["date"])
+    return docs
+
+
 # -- Public API -----------------------------------------------------------
 
 
@@ -104,7 +195,12 @@ def _last_stored_date(symbol: str) -> datetime | None:
         sort=[("date", -1)],
         projection={"date": 1, "_id": 0},
     )
-    return doc["date"] if doc else None
+    if not doc:
+        return None
+    # BSON datetimes decode as naive UTC by default; AV-parsed dates are
+    # tz-aware UTC. Normalize so downstream comparisons don't mix kinds.
+    d = doc["date"]
+    return d.replace(tzinfo=timezone.utc) if d.tzinfo is None else d
 
 
 def ingest_prices(
@@ -122,6 +218,13 @@ def ingest_prices(
     - ``"full"`` — force a delete-all-and-backfill.  Use for initial
       loading or repair.
     """
+    if not is_tradeable_symbol(symbol):
+        # Guard against cash / N.A. placeholders sneaking into callers
+        # that didn't pre-filter.  AV returns an error envelope for these
+        # and poisons the daily run with noise.
+        log.debug("Skipping non-tradeable symbol %r", symbol)
+        return PriceIngestReport(symbol=symbol, mode=mode)
+
     av = client or AlphaVantageClient()
 
     if mode == "full":

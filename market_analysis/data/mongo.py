@@ -32,6 +32,7 @@ from market_analysis.services.config import get_settings
 
 COMPANIES = "companies"
 ETF = "etf"
+INDEXES = "indexes"
 DAILY_QUOTES = "daily_quotes"
 INDICATORS = "indicators"
 THEME_GROUPS = "theme_groups"
@@ -72,6 +73,7 @@ TIMESERIES_OPTIONS: dict[str, dict] = {
 ALL_COLLECTIONS: tuple[str, ...] = (
     COMPANIES,
     ETF,
+    INDEXES,
     DAILY_QUOTES,
     INDICATORS,
     THEME_GROUPS,
@@ -135,6 +137,10 @@ def companies() -> Collection:
 
 def etf() -> Collection:
     return db()[ETF]
+
+
+def indexes() -> Collection:
+    return db()[INDEXES]
 
 
 def daily_quotes() -> Collection:
