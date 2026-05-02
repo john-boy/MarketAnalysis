@@ -23,6 +23,7 @@ from market_analysis.services.ingestors import daily as daily_svc
 from market_analysis.services.ingestors import etf as etf_ingestor
 from market_analysis.services.ingestors import prices as price_ingestor
 from market_analysis.services.ingestors._common import is_tradeable_symbol
+from market_analysis.services.run_logging import run_log
 from market_analysis.sources.alpha_vantage import AlphaVantageClient, AlphaVantageError
 
 
@@ -65,15 +66,24 @@ class DailyWorker(_BaseWorker):
 
     def _run_inner(self) -> None:
         av = AlphaVantageClient(cache=self._cache)
-        report = daily_svc.daily_update(
-            etf_symbols=self._etf_symbols,
-            client=av,
-            progress=self.log.emit,
-            skip_prices=self._skip_prices,
-            skip_indicators=self._skip_indicators,
-            skip_indexes=self._skip_indexes,
-            limit_symbols=self._limit_symbols,
+        scope = (
+            "all" if self._etf_symbols is None
+            else ",".join(self._etf_symbols)
         )
+        with run_log(
+            "daily_update",
+            source=f"gui (scope={scope})",
+            extra_progress=self.log.emit,
+        ) as progress:
+            report = daily_svc.daily_update(
+                etf_symbols=self._etf_symbols,
+                client=av,
+                progress=progress,
+                skip_prices=self._skip_prices,
+                skip_indicators=self._skip_indicators,
+                skip_indexes=self._skip_indexes,
+                limit_symbols=self._limit_symbols,
+            )
         summary = (
             f"{len(report.etfs_refreshed)} ETF(s), "
             f"{report.unique_symbols} unique symbols, "
