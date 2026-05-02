@@ -187,6 +187,7 @@ class PriceIngestReport:
     first_date: datetime | None = None
     last_date: datetime | None = None
     escalated: bool = False  # incremental → full because of gap
+    empty_payload: bool = False  # AV returned no rows (silent miss)
 
 
 def _last_stored_date(symbol: str) -> datetime | None:
@@ -265,7 +266,9 @@ def _ingest_incremental(
     docs = _parse_daily_adjusted(payload, symbol)
     if not docs:
         log.warning("No compact series for %s; wrote nothing.", symbol)
-        return PriceIngestReport(symbol=symbol, mode="incremental")
+        return PriceIngestReport(
+            symbol=symbol, mode="incremental", empty_payload=True,
+        )
 
     # Gap check: if the oldest bar in the compact window is still newer
     # than the last stored bar, a gap > 100 trading days exists.  Fall

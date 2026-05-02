@@ -265,6 +265,42 @@ class FundamentalsWorker(_BaseWorker):
         self.done.emit(True, f"{r.symbol}: {r.fields_seen} fields")
 
 
+class BatchFundamentalsWorker(_BaseWorker):
+    """Refresh AV OVERVIEW fundamentals across many symbols.
+
+    ``symbols=None`` means "every company in the ``companies`` collection".
+    Per-symbol AV errors are recorded but never abort the loop.
+    """
+
+    def __init__(
+        self,
+        *,
+        symbols: list[str] | None = None,
+        cache: bool = False,
+        limit: int | None = None,
+    ) -> None:
+        super().__init__()
+        self._symbols = symbols
+        self._cache = cache
+        self._limit = limit
+
+    def _run_inner(self) -> None:
+        from market_analysis.services.ingestors import fundamentals as fx
+
+        av = AlphaVantageClient(cache=self._cache)
+        report = fx.ingest_fundamentals_batch(
+            self._symbols,
+            client=av,
+            progress=self.log.emit,
+            limit=self._limit,
+        )
+        summary = (
+            f"updated {len(report.updated)} / requested {report.requested} "
+            f"(skipped {len(report.skipped)}, errors {len(report.errors)})"
+        )
+        self.done.emit(len(report.errors) == 0, summary)
+
+
 class IndexIngestWorker(_BaseWorker):
     """Ingest a single tracked index.
 

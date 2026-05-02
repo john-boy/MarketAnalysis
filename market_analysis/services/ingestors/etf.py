@@ -109,6 +109,13 @@ def ingest_etf(
     model = _etf_from_payload(symbol, payload)
     doc = model.to_mongo()
 
+    # Don't clobber a user-supplied display name with AV's ``None``.
+    # If AV's ETF_PROFILE has no ``name`` for this ticker, leave whatever
+    # name is already stored in place (the user may have set it from the
+    # Admin UI).
+    if doc.get("name") is None:
+        doc.pop("name", None)
+
     # Upsert ETF by symbol.
     mongo.etf().update_one(
         {"symbol": symbol},
@@ -136,6 +143,17 @@ def ingest_etf(
         companies_upserted=companies_upserted,
         holding_symbols=[h.symbol for h in model.holdings],
     )
+
+
+def set_etf_name(symbol: str, name: str | None) -> bool:
+    """Set or clear the display name on an ETF row.
+
+    Returns True if the row exists and was updated.
+    """
+    sym = symbol.upper()
+    name = (name or "").strip() or None
+    update: dict = {"$set": {"name": name}} if name else {"$unset": {"name": ""}}
+    return mongo.etf().update_one({"symbol": sym}, update).matched_count > 0
 
 
 def list_tracked_etfs() -> list[str]:

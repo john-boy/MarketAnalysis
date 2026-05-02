@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
+from typing import Any, Callable
 
 from market_analysis.data import mongo
 from market_analysis.data.models import utcnow
@@ -191,3 +191,71 @@ def ingest_fundamentals(
         upsert=True,
     )
     return FundamentalsReport(symbol=sym, updated=True, fields_seen=len(fund))
+
+
+# -- Batch ----------------------------------------------------------------
+
+
+@dataclass
+class BatchFundamentalsReport:
+    requested: int = 0
+    updated: list[str] = field(default_factory=list)
+    skipped: list[tuple[str, str]] = field(default_factory=list)
+    errors: list[tuple[str, str]] = field(default_factory=list)
+
+
+Progress = Callable[[str], None]
+
+
+def list_company_symbols() -> list[str]:
+    """Every symbol with a ``companies`` row, sorted."""
+    return sorted(mongo.companies().distinct("symbol"))
+
+
+def ingest_fundamentals_batch(
+    symbols: list[str] | None = None,
+    *,
+    client: AlphaVantageClient | None = None,
+    progress: Progress | None = None,
+    limit: int | None = None,
+) -> BatchFundamentalsReport:
+    """Refresh fundamentals for many symbols.
+
+    ``symbols=None`` means "every company in the ``companies`` collection".
+    Per-symbol failures are recorded and the loop continues — AV throttling
+    on one symbol shouldn't kill the whole batch.
+    """
+    av = client or AlphaVantageClient()
+    say: Progress = progress or (lambda _line: None)
+
+    if symbols is None:
+        symbols = list_company_symbols()
+    symbols = [s.upper() for s in symbols]
+    if limit is not None:
+        symbols = symbols[:limit]
+
+    report = BatchFundamentalsReport(requested=len(symbols))
+    say(f"Batch fundamentals: {len(symbols)} symbol(s)…")
+    for i, sym in enumerate(symbols, 1):
+        prefix = f"  [{i:>4}/{len(symbols)}] {sym}"
+        try:
+            r = ingest_fundamentals(sym, client=av)
+        except Exception as e:  # noqa: BLE001
+            log.exception("%s: unexpected error in batch fundamentals", sym)
+            report.errors.append((sym, f"unexpected: {e}"))
+            say(f"{prefix}: unexpected: {e}")
+            continue
+        if r.error:
+            report.errors.append((sym, r.error))
+            say(f"{prefix}: ERROR {r.error}")
+        elif r.skipped_reason:
+            report.skipped.append((sym, r.skipped_reason))
+            say(f"{prefix}: skipped ({r.skipped_reason})")
+        elif r.updated:
+            report.updated.append(sym)
+            say(f"{prefix}: +{r.fields_seen} fields")
+    say(
+        f"Batch done: updated={len(report.updated)} "
+        f"skipped={len(report.skipped)} errors={len(report.errors)}"
+    )
+    return report

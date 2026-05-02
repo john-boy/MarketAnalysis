@@ -51,6 +51,7 @@ class DailyReport:
     prices_up_to_date: int = 0         # symbols with no new bars
     prices_bootstrapped: int = 0       # symbols seeded from empty
     prices_escalated: int = 0          # gap > 100 days → full refresh
+    prices_empty_payload: int = 0      # AV returned no rows (silent miss)
     indicators_updated: int = 0
     indexes_refreshed: list[str] = field(default_factory=list)
     index_errors: list[str] = field(default_factory=list)
@@ -154,6 +155,14 @@ def daily_update(
                 report.prices_updated += 1
                 say(f"  [{i:>4}/{len(symbols)}] {sym}: "
                     f"+{r.inserted} bars (→ {r.last_date.date()})")
+            elif r.empty_payload:
+                # AV returned an empty Time Series — distinct from
+                # "already up-to-date".  Surface it so callers can see
+                # which symbols silently missed their refresh.
+                report.prices_empty_payload += 1
+                msg = f"{sym}: AV returned no rows (no update applied)"
+                report.errors.append(msg)
+                say(f"  [{i:>4}/{len(symbols)}] {msg}")
             else:
                 report.prices_up_to_date += 1
                 # Keep it quiet — one line per up-to-date symbol is noise.
@@ -229,6 +238,7 @@ def daily_update(
         f"bootstrapped={report.prices_bootstrapped} "
         f"up-to-date={report.prices_up_to_date} "
         f"escalated={report.prices_escalated} "
+        f"empty-payload={report.prices_empty_payload} "
         f"ind-updated={report.indicators_updated} "
         f"indexes={len(report.indexes_refreshed)} "
         f"errors={len(report.errors) + len(report.index_errors)}"

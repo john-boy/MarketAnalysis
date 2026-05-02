@@ -43,6 +43,7 @@ from PySide6.QtWidgets import (
 )
 
 from market_analysis.app.widgets.ingest_worker import (
+    BatchFundamentalsWorker,
     DailyWorker,
     ETFIngestWorker,
     FullRefreshWorker,
@@ -128,6 +129,7 @@ class AdminTab(QWidget):
         self._tabs.addTab(self._build_full_tab(), "Full refresh")
         self._tabs.addTab(self._build_etf_tab(), "ETFs")
         self._tabs.addTab(self._build_index_tab(), "Indexes")
+        self._tabs.addTab(self._build_fundamentals_tab(), "Fundamentals")
         splitter.addWidget(self._tabs)
 
         splitter.addWidget(self._build_log_panel())
@@ -234,10 +236,20 @@ class AdminTab(QWidget):
         self._etf_table.horizontalHeader().setSectionResizeMode(
             0, QHeaderView.ResizeMode.ResizeToContents
         )
-        self._etf_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        # Name (col 1) is editable in-place; symbol (col 0) is not.
+        # Persistence is handled in ``_on_etf_cell_changed`` after the
+        # user commits an edit.
+        self._etf_table.setEditTriggers(
+            QTableWidget.EditTrigger.DoubleClicked
+            | QTableWidget.EditTrigger.SelectedClicked
+            | QTableWidget.EditTrigger.EditKeyPressed
+        )
         self._etf_table.setSelectionBehavior(
             QTableWidget.SelectionBehavior.SelectRows
         )
+        self._etf_table.cellChanged.connect(self._on_etf_cell_changed)
+        # Suppress the cellChanged hook while we rebuild the table.
+        self._etf_table_loading = False
         layout.addWidget(self._etf_table, 1)
 
         # Add / ingest row
@@ -327,6 +339,69 @@ class AdminTab(QWidget):
         self._idx_buttons = [add_btn, ingest_btn, reingest_btn, remove_btn]
         return w
 
+    # -- Tab: Fundamentals --------------------------------------------
+
+    def _build_fundamentals_tab(self) -> QWidget:
+        w = QWidget()
+        layout = QVBoxLayout(w)
+
+        layout.addWidget(QLabel(
+            "Refresh Alpha Vantage OVERVIEW fundamentals for every company "
+            "in the database. Per-symbol failures are logged but never\n"
+            "abort the batch."
+        ))
+
+        form = QFormLayout()
+        self._fund_symbols = QLineEdit()
+        self._fund_symbols.setPlaceholderText(
+            "blank → all companies (comma-separated to scope, e.g. AAPL,MSFT)"
+        )
+        self._fund_limit = QSpinBox()
+        self._fund_limit.setRange(0, 100_000)
+        self._fund_limit.setSpecialValueText("all")
+        self._fund_limit.setValue(0)
+        form.addRow("Symbols:", self._fund_symbols)
+        form.addRow("Limit:", self._fund_limit)
+        layout.addLayout(form)
+
+        self._fund_cache = QCheckBox("Use disk cache")
+        layout.addWidget(self._fund_cache)
+
+        act = QHBoxLayout()
+        self._fund_run_btn = QPushButton("Refresh fundamentals")
+        self._fund_run_btn.clicked.connect(self._on_fund_batch_clicked)
+        act.addWidget(self._fund_run_btn)
+        act.addStretch(1)
+        layout.addLayout(act)
+        layout.addStretch(1)
+        return w
+
+    def _on_fund_batch_clicked(self) -> None:
+        if self._busy():
+            return
+        raw = self._fund_symbols.text().strip()
+        symbols: list[str] | None
+        if raw:
+            symbols = [
+                s.strip().upper() for s in raw.split(",") if s.strip()
+            ] or None
+        else:
+            symbols = None
+        lim = self._fund_limit.value()
+        limit = None if lim == 0 else lim
+
+        self._log.clear()
+        scope = "all companies" if symbols is None else f"{len(symbols)} symbol(s)"
+        self._log_line(f"Batch fundamentals — {scope} (limit={limit or 'all'})")
+        self._set_buttons_enabled(False)
+        self._thread = QThread(self)
+        self._worker = BatchFundamentalsWorker(
+            symbols=symbols,
+            cache=self._fund_cache.isChecked(),
+            limit=limit,
+        )
+        self._wire_thread()
+
     # -- Refresh ------------------------------------------------------
 
     def refresh(self) -> None:
@@ -379,10 +454,40 @@ class AdminTab(QWidget):
         for sym in etf_ingestor.list_tracked_etfs():
             doc = queries.load_etf(sym) or {}
             rows.append((sym, doc.get("name") or ""))
-        self._etf_table.setRowCount(len(rows))
-        for i, (sym, name) in enumerate(rows):
-            self._etf_table.setItem(i, 0, QTableWidgetItem(sym))
-            self._etf_table.setItem(i, 1, QTableWidgetItem(name))
+        self._etf_table_loading = True
+        try:
+            self._etf_table.setRowCount(len(rows))
+            for i, (sym, name) in enumerate(rows):
+                sym_item = QTableWidgetItem(sym)
+                sym_item.setFlags(sym_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                self._etf_table.setItem(i, 0, sym_item)
+                name_item = QTableWidgetItem(name)
+                # Name (col 1) keeps the default editable flag.
+                self._etf_table.setItem(i, 1, name_item)
+        finally:
+            self._etf_table_loading = False
+
+    def _on_etf_cell_changed(self, row: int, col: int) -> None:
+        if self._etf_table_loading or col != 1:
+            return
+        sym_item = self._etf_table.item(row, 0)
+        name_item = self._etf_table.item(row, 1)
+        if sym_item is None or name_item is None:
+            return
+        sym = sym_item.text().strip().upper()
+        new_name = name_item.text().strip()
+        try:
+            ok = etf_ingestor.set_etf_name(sym, new_name or None)
+        except Exception as e:  # noqa: BLE001
+            self._log_line(f"ERROR setting name for {sym}: {e}")
+            return
+        if ok:
+            self._log_line(
+                f"{sym}: name set to {new_name!r}" if new_name
+                else f"{sym}: name cleared"
+            )
+        else:
+            self._log_line(f"WARN: {sym} not found while setting name.")
 
     def _refresh_index_table(self) -> None:
         rows = queries.list_indexes()
@@ -424,6 +529,7 @@ class AdminTab(QWidget):
     def _set_buttons_enabled(self, enabled: bool) -> None:
         self._daily_run_btn.setEnabled(enabled)
         self._full_run_btn.setEnabled(enabled)
+        self._fund_run_btn.setEnabled(enabled)
         for b in self._etf_buttons:
             b.setEnabled(enabled)
         for b in self._idx_buttons:
