@@ -19,11 +19,15 @@ vertical real estate.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QThread, Signal
+from datetime import datetime, timezone
+
+from PySide6.QtCore import QDate, Qt, QThread, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDateEdit,
+    QFileDialog,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -35,6 +39,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSpinBox,
     QSplitter,
+    QStackedWidget,
     QTabWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -49,7 +54,8 @@ from market_analysis.app.widgets.ingest_worker import (
     FullRefreshWorker,
     IndexIngestWorker,
 )
-from market_analysis.data.models import MarketIndex
+from market_analysis.data.models import Extractor, MarketIndex
+from market_analysis.services import extractors as extractors_svc
 from market_analysis.services import queries
 from market_analysis.services.config import get_settings
 from market_analysis.services.ingestors import daily as daily_svc
@@ -130,6 +136,7 @@ class AdminTab(QWidget):
         self._tabs.addTab(self._build_etf_tab(), "ETFs")
         self._tabs.addTab(self._build_index_tab(), "Indexes")
         self._tabs.addTab(self._build_fundamentals_tab(), "Fundamentals")
+        self._tabs.addTab(self._build_extractors_tab(), "Extractors")
         splitter.addWidget(self._tabs)
 
         splitter.addWidget(self._build_log_panel())
@@ -376,6 +383,234 @@ class AdminTab(QWidget):
         layout.addStretch(1)
         return w
 
+    # -- Tab: Extractors ---------------------------------------------
+
+    def _build_extractors_tab(self) -> QWidget:
+        w = QWidget()
+        layout = QVBoxLayout(w)
+
+        layout.addWidget(QLabel(
+            "Define named ML-feed extractors. Each builds a single dataframe "
+            "(date, OHLCV, candle, symbol) for SPY plus either an ETF and its\n"
+            "constituents (relative-strength) or a list of ETFs (rotation)."
+        ))
+
+        self._ext_table = QTableWidget(0, 5)
+        self._ext_table.setHorizontalHeaderLabels(
+            ["Name", "Kind", "Target", "Start date", "Last run"]
+        )
+        self._ext_table.verticalHeader().setVisible(False)
+        self._ext_table.horizontalHeader().setStretchLastSection(True)
+        self._ext_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self._ext_table.setSelectionBehavior(
+            QTableWidget.SelectionBehavior.SelectRows
+        )
+        self._ext_table.itemSelectionChanged.connect(self._on_extractor_selected)
+        layout.addWidget(self._ext_table, 1)
+
+        # Form for adding / editing an extractor.
+        form_box = QGroupBox("Specification")
+        form = QFormLayout(form_box)
+
+        self._ext_name = QLineEdit()
+        self._ext_name.setPlaceholderText("Unique name (e.g. xlf_relstrength)")
+        form.addRow("Name:", self._ext_name)
+
+        self._ext_kind = QComboBox()
+        self._ext_kind.addItem("ETF + constituents (relative strength)", "etf")
+        self._ext_kind.addItem("Rotation (list of ETFs)", "rotation")
+        self._ext_kind.currentIndexChanged.connect(self._on_extractor_kind_changed)
+        form.addRow("Kind:", self._ext_kind)
+
+        # Stacked input: ETF symbol field (etf-kind) or symbols list (rotation).
+        self._ext_payload = QStackedWidget()
+
+        etf_w = QWidget()
+        etf_l = QFormLayout(etf_w)
+        etf_l.setContentsMargins(0, 0, 0, 0)
+        self._ext_etf_symbol = QLineEdit()
+        self._ext_etf_symbol.setPlaceholderText("ETF ticker (e.g. XLF) — must be tracked")
+        etf_l.addRow("ETF symbol:", self._ext_etf_symbol)
+        self._ext_payload.addWidget(etf_w)
+
+        rot_w = QWidget()
+        rot_l = QFormLayout(rot_w)
+        rot_l.setContentsMargins(0, 0, 0, 0)
+        self._ext_symbols = QLineEdit()
+        self._ext_symbols.setPlaceholderText(
+            "Comma-separated symbols (e.g. XLB,XLC,XLE,XLF,XLI,XLK,XLP,XLRE,XLU,XLV,XLY)"
+        )
+        rot_l.addRow("Symbols:", self._ext_symbols)
+        self._ext_payload.addWidget(rot_w)
+
+        form.addRow("Members:", self._ext_payload)
+
+        self._ext_start = QDateEdit()
+        self._ext_start.setCalendarPopup(True)
+        self._ext_start.setDisplayFormat("yyyy-MM-dd")
+        self._ext_start.setDate(QDate(2015, 1, 1))
+        form.addRow("Start date:", self._ext_start)
+
+        self._ext_description = QLineEdit()
+        self._ext_description.setPlaceholderText("Optional description")
+        form.addRow("Description:", self._ext_description)
+
+        layout.addWidget(form_box)
+
+        act = QHBoxLayout()
+        save_btn = QPushButton("Save")
+        save_btn.setToolTip("Insert or update by name.")
+        save_btn.clicked.connect(self._on_extractor_save_clicked)
+        new_btn = QPushButton("New")
+        new_btn.setToolTip("Clear the form for a new spec.")
+        new_btn.clicked.connect(self._on_extractor_new_clicked)
+        run_btn = QPushButton("Run extract")
+        run_btn.setToolTip("Build the dataframe and write a CSV.")
+        run_btn.clicked.connect(self._on_extractor_run_clicked)
+        remove_btn = QPushButton("Remove selected")
+        remove_btn.clicked.connect(self._on_extractor_remove_clicked)
+        act.addWidget(save_btn)
+        act.addWidget(new_btn)
+        act.addWidget(run_btn)
+        act.addWidget(remove_btn)
+        act.addStretch(1)
+        layout.addLayout(act)
+
+        self._ext_buttons = [save_btn, new_btn, run_btn, remove_btn]
+        return w
+
+    def _on_extractor_kind_changed(self, idx: int) -> None:
+        self._ext_payload.setCurrentIndex(idx)
+
+    def _refresh_extractor_table(self) -> None:
+        rows = extractors_svc.list_extractors()
+        self._ext_rows = rows
+        self._ext_table.setRowCount(len(rows))
+        for i, rec in enumerate(rows):
+            self._ext_table.setItem(i, 0, QTableWidgetItem(rec.name))
+            self._ext_table.setItem(i, 1, QTableWidgetItem(rec.kind))
+            target = (
+                rec.etf_symbol or "" if rec.kind == "etf"
+                else ", ".join(rec.symbols)
+            )
+            self._ext_table.setItem(i, 2, QTableWidgetItem(target))
+            self._ext_table.setItem(
+                i, 3, QTableWidgetItem(rec.start_date.strftime("%Y-%m-%d"))
+            )
+            last = rec.last_run.strftime("%Y-%m-%d %H:%M") if rec.last_run else "—"
+            self._ext_table.setItem(i, 4, QTableWidgetItem(last))
+        self._ext_table.resizeColumnsToContents()
+
+    def _on_extractor_selected(self) -> None:
+        row = self._ext_table.currentRow()
+        if row < 0 or row >= len(getattr(self, "_ext_rows", [])):
+            return
+        rec = self._ext_rows[row]
+        self._ext_name.setText(rec.name)
+        kind_idx = 0 if rec.kind == "etf" else 1
+        self._ext_kind.setCurrentIndex(kind_idx)
+        self._ext_payload.setCurrentIndex(kind_idx)
+        self._ext_etf_symbol.setText(rec.etf_symbol or "")
+        self._ext_symbols.setText(",".join(rec.symbols))
+        d = rec.start_date
+        self._ext_start.setDate(QDate(d.year, d.month, d.day))
+        self._ext_description.setText(rec.description or "")
+
+    def _on_extractor_new_clicked(self) -> None:
+        self._ext_table.clearSelection()
+        self._ext_name.clear()
+        self._ext_kind.setCurrentIndex(0)
+        self._ext_payload.setCurrentIndex(0)
+        self._ext_etf_symbol.clear()
+        self._ext_symbols.clear()
+        self._ext_start.setDate(QDate(2015, 1, 1))
+        self._ext_description.clear()
+
+    def _on_extractor_save_clicked(self) -> None:
+        name = self._ext_name.text().strip()
+        if not name:
+            self._log_line("ERROR: extractor name is required.")
+            return
+        kind = self._ext_kind.currentData()
+        qd = self._ext_start.date()
+        start_dt = datetime(qd.year(), qd.month(), qd.day(), tzinfo=timezone.utc)
+
+        try:
+            if kind == "etf":
+                rec = Extractor(
+                    name=name,
+                    kind="etf",
+                    etf_symbol=self._ext_etf_symbol.text().strip().upper() or None,
+                    start_date=start_dt,
+                    description=self._ext_description.text().strip() or None,
+                )
+            else:
+                raw = self._ext_symbols.text()
+                symbols = [s.strip().upper() for s in raw.split(",") if s.strip()]
+                rec = Extractor(
+                    name=name,
+                    kind="rotation",
+                    symbols=symbols,
+                    start_date=start_dt,
+                    description=self._ext_description.text().strip() or None,
+                )
+        except ValueError as e:
+            self._log_line(f"ERROR: {e}")
+            return
+
+        inserted = extractors_svc.save_extractor(rec)
+        self._log_line(
+            f"{'Added' if inserted else 'Updated'} extractor {rec.name} "
+            f"({rec.kind})."
+        )
+        self._refresh_extractor_table()
+
+    def _on_extractor_remove_clicked(self) -> None:
+        row = self._ext_table.currentRow()
+        if row < 0 or row >= len(getattr(self, "_ext_rows", [])):
+            return
+        rec = self._ext_rows[row]
+        resp = QMessageBox.question(
+            self,
+            "Remove extractor",
+            f"Remove extractor {rec.name!r}?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if resp != QMessageBox.StandardButton.Yes:
+            return
+        ok = extractors_svc.delete_extractor(rec.name)
+        self._log_line(f"Removed extractor {rec.name}: {ok}")
+        self._refresh_extractor_table()
+
+    def _on_extractor_run_clicked(self) -> None:
+        row = self._ext_table.currentRow()
+        if row < 0 or row >= len(getattr(self, "_ext_rows", [])):
+            self._log_line("ERROR: select an extractor first.")
+            return
+        rec = self._ext_rows[row]
+        default = str(extractors_svc.default_output_path(rec.name))
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Write extract CSV", default, "CSV files (*.csv)"
+        )
+        if not path:
+            return
+        self._log.clear()
+        self._log_line(f"Extract — {rec.name}")
+        try:
+            rows, report = extractors_svc.extract(rec.name, progress=self._log_line)
+        except KeyError as e:
+            self._log_line(f"ERROR: {e}")
+            return
+        out = extractors_svc.write_csv(rows, path)
+        self._log_line(
+            f"Wrote {report.total_rows:,} rows / {len(report.symbols)} symbol(s) → {out}"
+        )
+        if report.missing_symbols:
+            self._log_line(
+                f"WARN: no data for {', '.join(report.missing_symbols)}"
+            )
+        self._refresh_extractor_table()
+
     def _on_fund_batch_clicked(self) -> None:
         if self._busy():
             return
@@ -434,6 +669,7 @@ class AdminTab(QWidget):
         if h.reachable:
             self._refresh_etf_table()
             self._refresh_index_table()
+            self._refresh_extractor_table()
 
     def _refresh_daily_scope(self, reachable: bool) -> None:
         prev = self._daily_scope.currentText()
@@ -533,6 +769,8 @@ class AdminTab(QWidget):
         for b in self._etf_buttons:
             b.setEnabled(enabled)
         for b in self._idx_buttons:
+            b.setEnabled(enabled)
+        for b in getattr(self, "_ext_buttons", []):
             b.setEnabled(enabled)
 
     # -- Daily + Full refresh -----------------------------------------

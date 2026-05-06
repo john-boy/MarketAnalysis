@@ -45,6 +45,7 @@ ACCOUNT_SYNC_LOG = "account_sync_log"
 FILINGS = "filings"
 NEWS = "news"
 PIPELINE_DEFINITIONS = "pipeline_definitions"
+EXTRACTORS = "extractors"
 SCHEMA_VERSION = "schema_version"
 
 #: Time-series collections, mapped to their creation options.
@@ -86,6 +87,7 @@ ALL_COLLECTIONS: tuple[str, ...] = (
     FILINGS,
     NEWS,
     PIPELINE_DEFINITIONS,
+    EXTRACTORS,
     SCHEMA_VERSION,
 )
 
@@ -189,6 +191,10 @@ def news() -> Collection:
 
 def pipeline_definitions() -> Collection:
     return db()[PIPELINE_DEFINITIONS]
+
+
+def extractors() -> Collection:
+    return db()[EXTRACTORS]
 
 
 def schema_version() -> Collection:
