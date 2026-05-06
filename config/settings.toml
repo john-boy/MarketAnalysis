@@ -7,8 +7,10 @@ database = "MarketAnalysis"
 prototype_database = "MarketAnalysis_Prototype"
 
 [poller]
-# Daily run time (ET, 24h).  Market close + 2h.
-run_time = "18:00"
+# Daily run time (ET, 24h).  Set to 21:00 ET (= 8:00 PM CT) per
+# AlphaVantage guidance — INDEX_DATA bars don't settle until later
+# in the evening, so the earlier 18:00 ET slot was missing them.
+run_time = "21:00"
 timezone = "America/New_York"
 enabled = true
 

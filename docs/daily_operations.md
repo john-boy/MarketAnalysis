@@ -35,7 +35,10 @@ I'll set up a launchd agent to run weekdays at 5:00 PM CT (= market close + 1h E
 
 Loaded and registered. Summary:
 
-- **Schedule:** Mon–Fri at 5:00 PM CT (= 6:00 PM ET, ~2h after market close)
+- **Schedule:** Mon–Fri at 8:00 PM CT (= 9:00 PM ET).  AlphaVantage's
+  INDEX_DATA bars don't settle until later in the evening, so the
+  earlier 5:00 PM CT slot was missing same-day index updates — bumped
+  per AV support guidance (2026-05-06).
 - **Plist:** `~/Library/LaunchAgents/com.greenthread.marketanalysis.daily.plist`
 - **Logs:** `logs/daily_update.log` (stdout) and `logs/daily_update.err` (stderr) in the project root — they append, so rotate occasionally
 - **Command run:** `.venv/bin/python -m scripts.daily_update` (no args → all tracked ETFs, prices + indicators)
@@ -56,7 +59,7 @@ launchctl load -w ~/Library/LaunchAgents/com.greenthread.marketanalysis.daily.pl
 ```
 
 **Caveats worth knowing:**
-1. launchd only fires when the Mac is awake. If the machine is asleep at 5pm, the job is skipped (it does *not* catch up on wake — that requires `pmset` wake schedules separately).
+1. launchd only fires when the Mac is awake. If the machine is asleep at 8pm, the job is skipped (it does *not* catch up on wake — that requires `pmset` wake schedules separately).
 2. It runs in your user session, so you need to be logged in. If you sometimes log out, switch to a LaunchDaemon under `/Library/LaunchDaemons` instead.
 3. AlphaVantage credentials need to be readable from the env launchd gives the job — typically loaded from a `.env` in the working directory; verify after the first scheduled run by checking the err log.
 
