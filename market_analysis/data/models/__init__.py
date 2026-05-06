@@ -27,6 +27,7 @@ from market_analysis.data.models.account import (
 )
 from market_analysis.data.models.company import Company
 from market_analysis.data.models.etf import ETF, Holding
+from market_analysis.data.models.extractor import Extractor, ExtractorKind
 from market_analysis.data.models.filing import Filing
 from market_analysis.data.models.indicator import Indicator, IndicatorMeta
 from market_analysis.data.models.market_index import IndexCategory, MarketIndex
@@ -47,6 +48,8 @@ __all__ = [
     "Company",
     "DocType",
     "ETF",
+    "Extractor",
+    "ExtractorKind",
     "Filing",
     "Holding",
     "IndexCategory",
