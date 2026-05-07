@@ -11,10 +11,12 @@ Output is a flat row-oriented sequence of dicts (one row per
 ``(symbol, date)`` pair) carrying the columns required by the ML
 pipeline::
 
-    date, volume, low, open, close, adjusted_close, high, candle, symbol
+    date, volume, low, open, close, adjusted_close, high, candle, symbol, weight
 
-Each row also carries the ``extractor`` name so multiple extracts can
-land in a single file or table without losing provenance.
+For ETF-kind extractors, ``weight`` is the constituent's weight in
+the ETF as reported by the AV holdings list; SPY and the ETF symbol
+itself carry ``None``.  Rotation-kind extractors carry ``None`` for
+every symbol.
 
 The service intentionally avoids a hard dependency on pandas: rows
 are plain dicts and the CSV writer in :func:`write_csv` uses the
@@ -47,6 +49,7 @@ COLUMNS: tuple[str, ...] = (
     "high",
     "candle",
     "symbol",
+    "weight",
 )
 
 
@@ -84,32 +87,39 @@ def delete_extractor(name: str) -> bool:
 # -- Symbol resolution ----------------------------------------------------
 
 
-def resolve_symbols(rec: Extractor) -> list[str]:
-    """Return the ordered list of symbols an extractor will pull.
+def resolve_symbols(rec: Extractor) -> list[tuple[str, float | None]]:
+    """Return the ordered ``(symbol, weight)`` pairs an extractor will pull.
 
     Order: SPY first, then the ETF (if etf-kind), then the
     constituent stocks (etf-kind) or the user-supplied symbols
-    (rotation-kind).  Duplicates are removed while preserving order.
+    (rotation-kind).  Duplicates are removed while preserving order;
+    the first occurrence's weight wins.
+
+    Weights are populated from the ETF's holdings only for ETF-kind
+    extractors; SPY, the ETF ticker itself, and any rotation-kind
+    symbol carry ``None``.
     """
-    out: list[str] = [SPY]
+    pairs: list[tuple[str, float | None]] = [(SPY, None)]
     if rec.kind == "etf":
-        out.append(rec.etf_symbol or "")
+        pairs.append(((rec.etf_symbol or ""), None))
         etf_doc = mongo.etf().find_one({"symbol": rec.etf_symbol}) or {}
         for h in etf_doc.get("holdings") or []:
             sym = h.get("symbol")
             if sym:
-                out.append(sym)
+                weight = h.get("weight")
+                pairs.append((sym, float(weight) if weight is not None else None))
     else:  # rotation
-        out.extend(rec.symbols)
+        for s in rec.symbols:
+            pairs.append((s, None))
 
     seen: set[str] = set()
-    deduped: list[str] = []
-    for s in out:
-        s = (s or "").strip().upper()
-        if not s or s in seen:
+    deduped: list[tuple[str, float | None]] = []
+    for sym, weight in pairs:
+        sym = (sym or "").strip().upper()
+        if not sym or sym in seen:
             continue
-        seen.add(s)
-        deduped.append(s)
+        seen.add(sym)
+        deduped.append((sym, weight))
     return deduped
 
 
@@ -131,15 +141,16 @@ def extract(name: str, *, progress=None) -> tuple[list[dict[str, Any]], ExtractR
     """Build the extraction dataframe rows for the named extractor.
 
     Returns ``(rows, report)`` — rows is a list of dicts in
-    :data:`COLUMNS` order with a leading ``extractor`` field.  The
-    report carries per-symbol bar counts and any symbols that returned
-    no data (so the UI/CLI can flag coverage gaps).
+    :data:`COLUMNS` order.  The report carries per-symbol bar counts
+    and any symbols that returned no data (so the UI/CLI can flag
+    coverage gaps).
     """
     rec = get_extractor(name)
     if rec is None:
         raise KeyError(f"Extractor not found: {name}")
 
-    symbols = resolve_symbols(rec)
+    pairs = resolve_symbols(rec)
+    symbols = [s for s, _ in pairs]
     if progress:
         progress(f"resolved {len(symbols)} symbol(s) for {name}: {', '.join(symbols)}")
 
@@ -165,7 +176,7 @@ def extract(name: str, *, progress=None) -> tuple[list[dict[str, Any]], ExtractR
         "metadata.symbol": 1,
     }
 
-    for sym in symbols:
+    for sym, weight in pairs:
         cur = coll.find(
             {"metadata.symbol": sym, "date": {"$gte": rec.start_date}},
             projection=proj,
@@ -173,7 +184,6 @@ def extract(name: str, *, progress=None) -> tuple[list[dict[str, Any]], ExtractR
         n = 0
         for doc in cur:
             rows.append({
-                "extractor": rec.name,
                 "date": doc.get("date"),
                 "volume": doc.get("volume"),
                 "low": doc.get("low"),
@@ -183,6 +193,7 @@ def extract(name: str, *, progress=None) -> tuple[list[dict[str, Any]], ExtractR
                 "high": doc.get("high"),
                 "candle": doc.get("candle"),
                 "symbol": sym,
+                "weight": weight,
             })
             n += 1
         report.rows_per_symbol[sym] = n
@@ -208,7 +219,7 @@ def write_csv(rows: Iterable[dict[str, Any]], path: str | Path) -> Path:
     """Write extracted rows to ``path`` as CSV.  Returns the path."""
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    fieldnames = ["extractor", *COLUMNS]
+    fieldnames = list(COLUMNS)
     with p.open("w", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=fieldnames)
         w.writeheader()
