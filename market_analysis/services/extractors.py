@@ -233,7 +233,7 @@ def write_csv(rows: Iterable[dict[str, Any]], path: str | Path) -> Path:
 
 
 def default_output_path(name: str, *, root: str | Path = "extracts") -> Path:
-    """Return ``<root>/<name>_<YYYYMMDD-HHMMSS>.csv`` for an extract."""
-    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    """Return ``<root>/<name>_<YYYYMMDD>.csv`` for an extract."""
+    ts = datetime.now().strftime("%Y%m%d")
     safe = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in name)
     return Path(root) / f"{safe}_{ts}.csv"
