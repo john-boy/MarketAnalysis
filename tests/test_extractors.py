@@ -82,12 +82,21 @@ def test_resolve_symbols_etf_kind():
     rec = Extractor(name="x", kind="etf", etf_symbol="XLF", start_date=_start())
     etf_doc = {
         "symbol": "XLF",
-        "holdings": [{"symbol": "JPM"}, {"symbol": "BAC"}, {"symbol": "JPM"}],
+        "holdings": [
+            {"symbol": "JPM", "weight": 0.12},
+            {"symbol": "BAC", "weight": 0.07},
+            {"symbol": "JPM", "weight": 0.99},  # dup — first wins
+        ],
     }
     with patch.object(ex.mongo, "etf", return_value=_FakeColl(doc=etf_doc)):
-        symbols = ex.resolve_symbols(rec)
-    # SPY first, then ETF, then deduped holdings.
-    assert symbols == ["SPY", "XLF", "JPM", "BAC"]
+        pairs = ex.resolve_symbols(rec)
+    # SPY first, then ETF, then deduped holdings; weights only on constituents.
+    assert pairs == [
+        ("SPY", None),
+        ("XLF", None),
+        ("JPM", 0.12),
+        ("BAC", 0.07),
+    ]
 
 
 def test_resolve_symbols_rotation_kind():
@@ -96,14 +105,14 @@ def test_resolve_symbols_rotation_kind():
         symbols=["XLB", "spy", "XLC"],  # SPY mixed-case → folded
         start_date=_start(),
     )
-    symbols = ex.resolve_symbols(rec)
-    assert symbols == ["SPY", "XLB", "XLC"]
+    pairs = ex.resolve_symbols(rec)
+    assert pairs == [("SPY", None), ("XLB", None), ("XLC", None)]
 
 
 # -- extract -------------------------------------------------------------
 
 
-def test_extract_builds_rows_with_extractor_name():
+def test_extract_builds_rows_with_columns():
     rec = Extractor(
         name="rot", kind="rotation",
         symbols=["XLB"], start_date=_start(),
@@ -133,8 +142,9 @@ def test_extract_builds_rows_with_extractor_name():
     assert report.symbols == ["SPY", "XLB"]
     assert report.missing_symbols == []
     assert {r["symbol"] for r in rows} == {"SPY", "XLB"}
-    assert all(r["extractor"] == "rot" for r in rows)
-    assert all(set(r) >= set(("extractor", *ex.COLUMNS)) for r in rows)
+    assert all("extractor" not in r for r in rows)
+    assert all(r["weight"] is None for r in rows)  # rotation kind → no weights
+    assert all(set(r) >= set(ex.COLUMNS) for r in rows)
 
 
 def test_extract_records_missing_symbols():
@@ -151,17 +161,19 @@ def test_extract_records_missing_symbols():
     assert set(report.missing_symbols) == {"SPY", "XLB"}
 
 
-def test_write_csv_includes_header_and_extractor(tmp_path):
+def test_write_csv_header_and_weight(tmp_path):
     out = tmp_path / "out.csv"
     rows = [{
-        "extractor": "demo",
         "date": datetime(2020, 1, 2, tzinfo=timezone.utc),
         "open": 1.0, "high": 2.0, "low": 0.5, "close": 1.5,
         "adjusted_close": 1.4, "volume": 1000.0, "candle": 0.1,
-        "symbol": "SPY",
+        "symbol": "JPM", "weight": 0.12,
     }]
     p = ex.write_csv(rows, out)
     text = p.read_text()
-    assert text.splitlines()[0] == "extractor,date,volume,low,open,close,adjusted_close,high,candle,symbol"
-    assert "demo" in text
-    assert "SPY" in text
+    assert text.splitlines()[0] == (
+        "date,volume,low,open,close,adjusted_close,high,candle,symbol,weight"
+    )
+    assert "0.12" in text
+    assert "JPM" in text
+    assert "extractor" not in text
