@@ -2,8 +2,8 @@
 
 Two kinds of extractors:
 
-- ``etf`` — relative-strength: SPY + the ETF + every current
-  constituent stock of that ETF.
+- ``etf`` — relative-strength: the ETF + every current constituent
+  stock of that ETF.
 - ``rotation`` — sector-rotation: SPY + a user-supplied list of ETFs
   (or arbitrary tickers).
 
@@ -90,16 +90,16 @@ def delete_extractor(name: str) -> bool:
 def resolve_symbols(rec: Extractor) -> list[tuple[str, float | None]]:
     """Return the ordered ``(symbol, weight)`` pairs an extractor will pull.
 
-    Order: SPY first, then the ETF (if etf-kind), then the
-    constituent stocks (etf-kind) or the user-supplied symbols
-    (rotation-kind).  Duplicates are removed while preserving order;
-    the first occurrence's weight wins.
+    Order for etf-kind: the ETF first, then its constituent stocks.
+    Order for rotation-kind: SPY first, then the user-supplied
+    symbols.  Duplicates are removed while preserving order; the
+    first occurrence's weight wins.
 
     Weights are populated from the ETF's holdings only for ETF-kind
-    extractors; SPY, the ETF ticker itself, and any rotation-kind
+    extractors; the ETF ticker itself, SPY, and any rotation-kind
     symbol carry ``None``.
     """
-    pairs: list[tuple[str, float | None]] = [(SPY, None)]
+    pairs: list[tuple[str, float | None]] = []
     if rec.kind == "etf":
         pairs.append(((rec.etf_symbol or ""), None))
         etf_doc = mongo.etf().find_one({"symbol": rec.etf_symbol}) or {}
@@ -109,6 +109,7 @@ def resolve_symbols(rec: Extractor) -> list[tuple[str, float | None]]:
                 weight = h.get("weight")
                 pairs.append((sym, float(weight) if weight is not None else None))
     else:  # rotation
+        pairs.append((SPY, None))
         for s in rec.symbols:
             pairs.append((s, None))
 

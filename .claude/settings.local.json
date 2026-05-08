@@ -79,7 +79,13 @@
       "Bash(node --input-type=module -e \"import {MongoClient} from 'mongodb'; const c=new MongoClient\\('mongodb://127.0.0.1:27017',{serverSelectionTimeoutMS:5000}\\); console.time\\('connect'\\); await c.connect\\(\\); console.timeEnd\\('connect'\\); console.log\\('ping:', await c.db\\('admin'\\).command\\({ping:1}\\)\\); await c.close\\(\\);\")",
       "Bash(kill 74725 74723)",
       "Bash(pkill -f \"find node_modules\")",
-      "Bash(pkill -f \"/bin/cat ./node_modules\")"
+      "Bash(pkill -f \"/bin/cat ./node_modules\")",
+      "Bash(ls /Users/jhenry/.claude/projects/-Users-jhenry-Workspaces-GitHub-PyCharm-MarketAnalysis/memory/ 2>/dev/null)",
+      "Bash(find /Users/jhenry/Workspaces/GitHub/PyCharm/MarketAnalysis -type f -name \"*.py\" | grep -E \"\\(extract|cli|main|__main__|entry\\)\" | head -20)",
+      "Bash(python -m pytest tests/test_extractors.py -x -q)",
+      "Bash(chmod +x /Users/jhenry/Workspaces/GitHub/PyCharm/MarketAnalysis/.claude/worktrees/fervent-moser-2711a8/run-extract-all.sh)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)"
     ]
   }
 }
