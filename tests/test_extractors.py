@@ -90,9 +90,9 @@ def test_resolve_symbols_etf_kind():
     }
     with patch.object(ex.mongo, "etf", return_value=_FakeColl(doc=etf_doc)):
         pairs = ex.resolve_symbols(rec)
-    # SPY first, then ETF, then deduped holdings; weights only on constituents.
+    # ETF first, then deduped holdings; weights only on constituents.
+    # SPY is intentionally excluded from etf-kind extractions.
     assert pairs == [
-        ("SPY", None),
         ("XLF", None),
         ("JPM", 0.12),
         ("BAC", 0.07),

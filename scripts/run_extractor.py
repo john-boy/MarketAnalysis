@@ -25,6 +25,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("name", nargs="?", help="Extractor name to run.")
     ap.add_argument("-o", "--output", help="Output CSV path (default: extracts/<name>_<ts>.csv).")
     ap.add_argument("--list", action="store_true", help="List available extractors and exit.")
+    ap.add_argument("--all", action="store_true", help="Run every available extractor.")
     ap.add_argument("--log-level", default="INFO")
     args = ap.parse_args(argv)
 
@@ -43,8 +44,29 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {rec.name:<32}  {rec.kind:<8}  {target}  since {rec.start_date.date()}")
         return 0
 
+    if args.all:
+        if args.name:
+            ap.error("--all cannot be combined with a name argument")
+        if args.output:
+            ap.error("--all cannot be combined with --output (paths are auto-generated per extractor)")
+        recs = ex.list_extractors()
+        if not recs:
+            print("(no extractors defined)")
+            return 0
+        rc = 0
+        for rec in recs:
+            print(f"\n=== {rec.name} ===")
+            rows, report = ex.extract(rec.name, progress=print)
+            out = ex.write_csv(rows, ex.default_output_path(rec.name))
+            print(
+                f"Wrote {report.total_rows:,} rows across {len(report.symbols)} symbol(s) to {out}."
+            )
+            if report.missing_symbols:
+                print(f"WARNING: no data for: {', '.join(report.missing_symbols)}")
+        return rc
+
     if not args.name:
-        ap.error("name is required (or pass --list)")
+        ap.error("name is required (or pass --list / --all)")
 
     try:
         rows, report = ex.extract(args.name, progress=print)
