@@ -3,7 +3,9 @@
 
 [mongo]
 uri = "mongodb://localhost:27017"
-database = "MarketAnalysis"
+# Cutover from MarketAnalysis to WyckoffDB completed; all reads/writes
+# now resolve here. See docs/WYCKOFF_CODE_SPEC.md.
+database = "WyckoffDB"
 prototype_database = "MarketAnalysis_Prototype"
 
 [poller]

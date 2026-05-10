@@ -90,7 +90,7 @@ def _matches(doc: dict, query: dict) -> bool:
 def fake_daily_quotes(monkeypatch):
     fake = FakeCollection()
     monkeypatch.setattr(
-        "market_analysis.services.ingestors.prices.mongo.daily_quotes",
+        "market_analysis.services.ingestors.prices.mongo.price_history",
         lambda: fake,
     )
     return fake
@@ -110,7 +110,7 @@ def fake_indicators(monkeypatch):
 def fake_daily_quotes_for_indicators(monkeypatch):
     fake = FakeCollection()
     monkeypatch.setattr(
-        "market_analysis.services.indicators.mongo.daily_quotes",
+        "market_analysis.services.indicators.mongo.price_history",
         lambda: fake,
     )
     return fake
@@ -151,8 +151,10 @@ def test_ingest_prices_auto_incremental_appends_only_new(fake_daily_quotes):
     rep = price_svc.ingest_prices("AAPL", client=_fake_av(payload), mode="auto")
     assert rep.mode == "incremental"
     assert rep.inserted == 1
-    # No deletes in incremental mode.
-    assert fake_daily_quotes.deletes == []
+    # Spec Change 5: incremental does delete-then-insert over the new
+    # date range so a re-ingestion of overlapping bars is idempotent.
+    assert len(fake_daily_quotes.deletes) == 1
+    assert fake_daily_quotes.deletes[0]["metadata.symbol"] == "AAPL"
     # One insert batch, one doc.
     assert len(fake_daily_quotes.inserts) == 1
     assert len(fake_daily_quotes.inserts[0]) == 1

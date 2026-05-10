@@ -35,3 +35,6 @@ logs/
 
 # Local data dumps
 data_dumps/
+
+# Claude Code runtime artifacts
+.claude/scheduled_tasks.lock

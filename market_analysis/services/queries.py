@@ -46,7 +46,7 @@ def db_health() -> DBHealth:
     version = schema_doc.get("version") if schema_doc else None
 
     counts: dict[str, int] = {}
-    for name in mongo.ALL_COLLECTIONS:
+    for name in (*mongo.WYCKOFF_COLLECTIONS, mongo.SCHEMA_VERSION):
         try:
             counts[name] = mongo.db()[name].estimated_document_count()
         except Exception:
@@ -65,8 +65,8 @@ def db_health() -> DBHealth:
 
 
 def list_symbols_with_quotes() -> list[str]:
-    """Return distinct symbols present in ``daily_quotes``, sorted."""
-    syms = mongo.daily_quotes().distinct("metadata.symbol")
+    """Return distinct symbols present in ``price_history``, sorted."""
+    syms = mongo.price_history().distinct("metadata.symbol")
     return sorted(s for s in syms if s)
 
 
@@ -79,7 +79,7 @@ class QuoteRow:
 
 def load_quotes(symbol: str, *, limit: int | None = None) -> list[QuoteRow]:
     """Return ascending quote rows for ``symbol`` (date, close, adjusted_close)."""
-    cur = mongo.daily_quotes().find(
+    cur = mongo.price_history().find(
         {"metadata.symbol": symbol},
         {"date": 1, "close": 1, "adjusted_close": 1, "_id": 0},
     ).sort("date", 1)
@@ -324,7 +324,7 @@ def list_watchlist() -> list[dict[str, Any]]:
     """Return every watchlist entry as a plain dict, sorted by symbol.
 
     Each row is enriched with ``last_quote_date`` (the most recent bar
-    in ``daily_quotes`` for that symbol, or ``None``) so the UI can
+    in ``price_history`` for that symbol, or ``None``) so the UI can
     surface coverage at a glance without a second round-trip per row.
     """
     from market_analysis.data.models import WatchlistEntry
@@ -332,7 +332,7 @@ def list_watchlist() -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for doc in mongo.watchlist().find({}).sort("symbol", 1):
         entry = WatchlistEntry.model_validate(doc)
-        last = mongo.daily_quotes().find_one(
+        last = mongo.price_history().find_one(
             {"metadata.symbol": entry.symbol},
             sort=[("date", -1)],
             projection={"date": 1, "_id": 0},

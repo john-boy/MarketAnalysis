@@ -18,3 +18,7 @@ class WatchlistEntry(MongoModel):
     source_of_origin: str | None = None
     added_at: datetime = Field(default_factory=utcnow)
     last_updated: datetime | None = None
+    #: Wyckoff analysis priority: 1 (highest) to 5 (lowest).
+    wyckoff_priority: int = 3
+    #: When the Wyckoff phase was last evaluated for this symbol.
+    last_phase_checked: datetime | None = None

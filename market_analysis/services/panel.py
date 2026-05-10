@@ -80,10 +80,11 @@ def load_close_panel(symbols: Sequence[str]) -> Panel:
             closes=xp.zeros((0, 0), dtype=FLOAT),
         )
 
-    coll = mongo.daily_quotes()
+    coll = mongo.price_history()
     cur = coll.find(
         {"metadata.symbol": {"$in": clean}},
-        {"date": 1, "adjusted_close": 1, "close": 1, "metadata.symbol": 1, "_id": 0},
+        {"date": 1, "adj_close": 1, "adjusted_close": 1, "close": 1,
+         "metadata.symbol": 1, "_id": 0},
     ).sort("date", 1)
 
     # Build per-symbol dict[date -> price] in one pass.
@@ -93,7 +94,9 @@ def load_close_panel(symbols: Sequence[str]) -> Panel:
         sym = doc["metadata"]["symbol"]
         if sym not in by_sym:
             continue
-        price = doc.get("adjusted_close")
+        price = doc.get("adj_close")
+        if price is None or (isinstance(price, float) and math.isnan(price)):
+            price = doc.get("adjusted_close")
         if price is None or (isinstance(price, float) and math.isnan(price)):
             price = doc.get("close")
         if price is None or (isinstance(price, float) and math.isnan(price)):

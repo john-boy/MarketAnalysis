@@ -36,24 +36,35 @@ def test_parse_daily_adjusted_basic():
             },
         },
     }
-    docs = _parse_daily_adjusted(payload, "AAPL")
+    docs = _parse_daily_adjusted(payload, "AAPL", asset_type="equity")
     assert len(docs) == 2
     # Sorted ascending by date.
     assert docs[0]["date"] < docs[1]["date"]
     d = docs[1]
-    assert d["metadata"] == {"symbol": "AAPL", "source": "alpha_vantage"}
+    assert d["metadata"] == {
+        "symbol": "AAPL", "source": "alpha_vantage", "asset_type": "equity",
+    }
     assert d["open"] == 184.22
     assert d["close"] == 184.25
     assert d["adjusted_close"] == 184.25
     assert d["volume"] == 58414500.0
     assert d["dividend"] == 0.0
     assert d["split_coefficient"] == 1.0
-    assert d["candle"] == d["close"] - d["open"]
+    # candle is rounded to 6 dp by compute_adj_fields().
+    from pytest import approx
+    assert d["candle"] == approx(d["close"] - d["open"])
+    # Adjusted fields: factor 1.0 on a non-split, non-dividend day.
+    assert d["adj_factor"] == 1.0
+    assert d["adj_close"] == 184.25
+    assert d["adj_open"] == 184.22
+    assert d["adj_volume"] == 58414500
 
 
 def test_parse_daily_adjusted_empty_series():
-    assert _parse_daily_adjusted({}, "AAPL") == []
-    assert _parse_daily_adjusted({"Time Series (Daily)": {}}, "AAPL") == []
+    assert _parse_daily_adjusted({}, "AAPL", asset_type="equity") == []
+    assert _parse_daily_adjusted(
+        {"Time Series (Daily)": {}}, "AAPL", asset_type="equity",
+    ) == []
 
 
 def test_parse_daily_adjusted_skips_bad_row_fields():
@@ -65,7 +76,7 @@ def test_parse_daily_adjusted_skips_bad_row_fields():
             },
         },
     }
-    docs = _parse_daily_adjusted(payload, "AAPL")
+    docs = _parse_daily_adjusted(payload, "AAPL", asset_type="equity")
     assert len(docs) == 1
     assert "open" not in docs[0]  # bad cast skipped
     assert docs[0]["close"] == 100.0

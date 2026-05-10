@@ -90,7 +90,7 @@ class MainWindow(QMainWindow):
         if not h.reachable:
             self.statusBar().showMessage(f"Mongo UNREACHABLE at {h.uri}")
             return
-        quotes = h.counts.get("daily_quotes", 0)
+        quotes = h.counts.get("price_history", 0)
         companies = h.counts.get("companies", 0)
         indicators = h.counts.get("indicators", 0)
         schema = "—" if h.schema_version is None else f"v{h.schema_version}"

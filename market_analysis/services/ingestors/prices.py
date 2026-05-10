@@ -1,22 +1,21 @@
 """Price ingestor.
 
 Fetches daily OHLCV for a symbol via the Alpha Vantage adapter and
-writes it to the ``daily_quotes`` time-series collection.
+writes it to the ``price_history`` time-series collection (WyckoffDB).
+Every doc carries split/dividend-adjusted OHLCV (``adj_factor``,
+``adj_open``, …) computed at ingest time per WYCKOFF_CODE_SPEC.md.
 
 Two modes:
 
 - ``"auto"`` (default, daily operations): look up the max ``date`` for
-  ``symbol`` in ``daily_quotes``.  If quotes exist, pull AV's 100-bar
-  ``compact`` window and insert only rows with ``date > last_date`` —
-  no deletes.  If the compact payload's oldest date is still later
-  than ``last_date + 1`` (a >100-trading-day gap), escalate to a full
-  refresh.  If no quotes exist, pull the full 20+-year history.
+  ``symbol`` in ``price_history``.  If quotes exist, pull AV's 100-bar
+  ``compact`` window and apply the spec's TSC-safe upsert pattern:
+  delete the date range we're about to insert, then insert fresh.
+  If the compact payload's oldest date is still later than ``last_date``
+  (a >100-trading-day gap), escalate to a full refresh.  If no quotes
+  exist, pull the full 20+-year history.
 - ``"full"`` (initial load / repair): ``delete_many({metadata.symbol})``
   then insert the full payload.
-
-Time-series collections don't support unique indexes, so incremental
-mode relies on the in-memory "date > last" filter; full mode relies
-on the delete-first-insert-later ordering.  Both are idempotent.
 
 This module has **no Qt imports**; it is callable from the poller
 and from CLI scripts.
@@ -30,7 +29,11 @@ from datetime import datetime, timezone
 from typing import Any
 
 from market_analysis.data import mongo
-from market_analysis.services.ingestors._common import is_tradeable_symbol
+from market_analysis.services.ingestors._common import (
+    compute_adj_fields,
+    derive_asset_type,
+    is_tradeable_symbol,
+)
 from market_analysis.sources.alpha_vantage import AlphaVantageClient
 
 
@@ -68,19 +71,33 @@ def _extract_daily_series(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _parse_daily_adjusted(
-    payload: dict[str, Any], symbol: str, source: str = "alpha_vantage",
+    payload: dict[str, Any],
+    symbol: str,
+    source: str = "alpha_vantage",
+    asset_type: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Translate an AV payload into ``daily_quotes`` docs."""
+    """Translate an AV payload into ``price_history`` docs.
+
+    ``asset_type`` is stamped into ``metadata``. If omitted, it is
+    derived once via :func:`derive_asset_type` (single DB lookup).
+    """
     series = payload.get("Time Series (Daily)") or {}
     if not isinstance(series, dict) or not series:
         return []
+
+    if asset_type is None:
+        asset_type = derive_asset_type(symbol)
 
     docs: list[dict[str, Any]] = []
     for date_str, row in series.items():
         date = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
         doc: dict[str, Any] = {
             "date": date,
-            "metadata": {"symbol": symbol, "source": source},
+            "metadata": {
+                "symbol": symbol,
+                "source": source,
+                "asset_type": asset_type,
+            },
         }
         for av_key, (target_key, caster) in _AV_FIELDS.items():
             raw = row.get(av_key)
@@ -90,9 +107,8 @@ def _parse_daily_adjusted(
                 doc[target_key] = caster(raw)
             except (TypeError, ValueError):
                 continue
-        # candle (prototype parity): close - open
-        if "open" in doc and "close" in doc:
-            doc["candle"] = doc["close"] - doc["open"]
+        # adj_factor + adj_open/high/low/close/volume + candle/adj_candle.
+        doc.update(compute_adj_fields(doc))
         docs.append(doc)
 
     docs.sort(key=lambda d: d["date"])
@@ -115,7 +131,7 @@ _AV_INDEX_FIELDS = {
 def _parse_index_daily(
     payload: dict[str, Any], symbol: str, source: str = "alpha_vantage",
 ) -> list[dict[str, Any]]:
-    """Translate an AV ``INDEX_DATA`` payload into ``daily_quotes`` docs.
+    """Translate an AV ``INDEX_DATA`` payload into ``price_history`` docs.
 
     Accepts both AV INDEX_DATA shapes:
 
@@ -128,7 +144,7 @@ def _parse_index_daily(
       cassettes/tests written against the older format still parse.
 
     Rows end up identical to :func:`_parse_daily_adjusted` output so
-    index quotes sit side by side with equity quotes in ``daily_quotes``.
+    index quotes sit side by side with equity quotes in ``price_history``.
     """
     rows: list[dict[str, Any]] = []
     data = payload.get("data")
@@ -157,7 +173,11 @@ def _parse_index_daily(
             continue
         doc: dict[str, Any] = {
             "date": date,
-            "metadata": {"symbol": symbol, "source": source},
+            "metadata": {
+                "symbol": symbol,
+                "source": source,
+                "asset_type": "index",
+            },
         }
         for av_key, (target_key, caster) in _AV_INDEX_FIELDS.items():
             raw = row.get(av_key)
@@ -167,8 +187,8 @@ def _parse_index_daily(
                 doc[target_key] = caster(raw)
             except (TypeError, ValueError):
                 continue
-        if "open" in doc and "close" in doc:
-            doc["candle"] = doc["close"] - doc["open"]
+        # Indices: no adjusted_close, factor=1.0, adj_* mirror raw values.
+        doc.update(compute_adj_fields(doc))
         docs.append(doc)
 
     docs.sort(key=lambda d: d["date"])
@@ -191,7 +211,7 @@ class PriceIngestReport:
 
 
 def _last_stored_date(symbol: str) -> datetime | None:
-    doc = mongo.daily_quotes().find_one(
+    doc = mongo.price_history().find_one(
         {"metadata.symbol": symbol},
         sort=[("date", -1)],
         projection={"date": 1, "_id": 0},
@@ -242,7 +262,7 @@ def _ingest_full(symbol: str, av: AlphaVantageClient) -> PriceIngestReport:
     payload = av.time_series_daily_adjusted(symbol, outputsize="full")
     docs = _parse_daily_adjusted(payload, symbol)
 
-    coll = mongo.daily_quotes()
+    coll = mongo.price_history()
     deleted = coll.delete_many({"metadata.symbol": symbol}).deleted_count
     if not docs:
         log.warning("No daily series for %s; wrote nothing.", symbol)
@@ -291,11 +311,21 @@ def _ingest_incremental(
             first_date=last, last_date=last,
         )
 
-    mongo.daily_quotes().insert_many(new_docs, ordered=False)
+    # TSC-safe upsert (spec Change 5): delete the date range we're about
+    # to insert, then insert fresh. With our `date > last` filter the
+    # delete is usually a no-op, but it guarantees idempotency when the
+    # latest stored bar gets revised by AV after market close.
+    coll = mongo.price_history()
+    min_d, max_d = new_docs[0]["date"], new_docs[-1]["date"]
+    coll.delete_many({
+        "metadata.symbol": symbol,
+        "date": {"$gte": min_d, "$lte": max_d},
+    })
+    coll.insert_many(new_docs, ordered=False)
     return PriceIngestReport(
         symbol=symbol,
         mode="incremental",
         inserted=len(new_docs),
-        first_date=new_docs[0]["date"],
-        last_date=new_docs[-1]["date"],
+        first_date=min_d,
+        last_date=max_d,
     )

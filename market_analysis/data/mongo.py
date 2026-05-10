@@ -8,7 +8,7 @@ Usage::
 
     from market_analysis.data import mongo
 
-    for quote in mongo.daily_quotes().find({"symbol": "SPY"}):
+    for quote in mongo.price_history().find({"symbol": "SPY"}):
         ...
 
 All accessors read the configured DB name lazily, so
@@ -33,7 +33,6 @@ from market_analysis.services.config import get_settings
 COMPANIES = "companies"
 ETF = "etf"
 INDEXES = "indexes"
-DAILY_QUOTES = "daily_quotes"
 INDICATORS = "indicators"
 THEME_GROUPS = "theme_groups"
 THEMES = "themes"
@@ -48,21 +47,32 @@ PIPELINE_DEFINITIONS = "pipeline_definitions"
 EXTRACTORS = "extractors"
 SCHEMA_VERSION = "schema_version"
 
+# -- WyckoffDB additions (see docs/WYCKOFF_CODE_SPEC.md) ------------------
+
+WYCKOFF_DB_NAME = "WyckoffDB"
+
+PRICE_HISTORY = "price_history"      # TSC; replaces daily_quotes
+SPLITS_EVENTS = "splits_events"
+FEATURES = "features"
+PHASE_LABELS = "phase_labels"
+TRANSITIONS = "transitions"
+PROJECTIONS = "projections"
+
 #: Time-series collections, mapped to their creation options.
-#: Both are daily data; the prototype was bucket-per-day and we mirror that.
+#: All are daily data; the prototype was bucket-per-day and we mirror that.
 #: ``metaField='metadata'`` tracks the real document shape (the prototype
 #: collections declared ``'symbol'`` / ``'indicator'`` but wrote
 #: ``{date, metadata: {...}, ...}``, leaving the declaration unused).
 #: See ADR-0008.
 TIMESERIES_OPTIONS: dict[str, dict] = {
-    "daily_quotes": {
+    PRICE_HISTORY: {
         "timeField": "date",
         "metaField": "metadata",
         # 1-day buckets, mirroring the prototype exactly.
         "bucketRoundingSeconds": 86400,
         "bucketMaxSpanSeconds": 86400,
     },
-    "indicators": {
+    INDICATORS: {
         "timeField": "date",
         "metaField": "metadata",
         "bucketRoundingSeconds": 86400,
@@ -70,27 +80,23 @@ TIMESERIES_OPTIONS: dict[str, dict] = {
     },
 }
 
-#: Every collection the migration creates.  Order is informational.
-ALL_COLLECTIONS: tuple[str, ...] = (
+#: Every WyckoffDB collection. Used by the setup script.
+#: ``indexes`` and ``indicators`` are pragmatic carryovers: spec said not
+#: to migrate them, but index ingestion would break and we want the
+#: indicators TSC ready for fresh adj_close-based recompute.
+WYCKOFF_COLLECTIONS: tuple[str, ...] = (
+    PRICE_HISTORY,
+    INDICATORS,
     COMPANIES,
     ETF,
     INDEXES,
-    DAILY_QUOTES,
-    INDICATORS,
-    THEME_GROUPS,
-    THEMES,
-    THEME_DOCUMENTS,
     WATCHLIST,
-    ACCOUNTS,
-    POSITIONS,
-    ACCOUNT_SYNC_LOG,
-    FILINGS,
-    NEWS,
-    PIPELINE_DEFINITIONS,
-    EXTRACTORS,
-    SCHEMA_VERSION,
+    SPLITS_EVENTS,
+    FEATURES,
+    PHASE_LABELS,
+    TRANSITIONS,
+    PROJECTIONS,
 )
-
 
 # -- Connection -----------------------------------------------------------
 
@@ -145,10 +151,6 @@ def indexes() -> Collection:
     return db()[INDEXES]
 
 
-def daily_quotes() -> Collection:
-    return db()[DAILY_QUOTES]
-
-
 def indicators() -> Collection:
     return db()[INDICATORS]
 
@@ -199,3 +201,30 @@ def extractors() -> Collection:
 
 def schema_version() -> Collection:
     return db()[SCHEMA_VERSION]
+
+
+# -- WyckoffDB additions (price_history, splits, features, etc.) ---------
+
+
+def price_history() -> Collection:
+    return db()[PRICE_HISTORY]
+
+
+def splits_events() -> Collection:
+    return db()[SPLITS_EVENTS]
+
+
+def features() -> Collection:
+    return db()[FEATURES]
+
+
+def phase_labels() -> Collection:
+    return db()[PHASE_LABELS]
+
+
+def transitions() -> Collection:
+    return db()[TRANSITIONS]
+
+
+def projections() -> Collection:
+    return db()[PROJECTIONS]

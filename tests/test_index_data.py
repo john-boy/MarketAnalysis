@@ -89,12 +89,15 @@ def test_parse_index_daily_live_shape():
     # Sorted ascending by date regardless of input ordering.
     assert docs[0]["date"] < docs[1]["date"]
     d = docs[1]
-    assert d["metadata"] == {"symbol": "VIX", "source": "alpha_vantage"}
+    assert d["metadata"] == {
+        "symbol": "VIX", "source": "alpha_vantage", "asset_type": "index",
+    }
     assert d["open"] == 14.04
     assert d["high"] == 14.81
     assert d["low"] == 13.88
     assert d["close"] == 14.24
-    assert d["candle"] == d["close"] - d["open"]
+    from pytest import approx
+    assert d["candle"] == approx(d["close"] - d["open"])
     assert "volume" not in d
     assert "adjusted_close" not in d
 
@@ -135,8 +138,8 @@ def test_direct_mode_ingest_calls_index_data():
     with patch.object(index_ingestor, "_load_index", return_value=rec), \
          patch.object(index_ingestor, "_stamp"), \
          patch.object(index_ingestor, "mongo") as mongo_mod:
-        mongo_mod.daily_quotes.return_value.find_one.return_value = None
-        mongo_mod.daily_quotes.return_value.delete_many.return_value.deleted_count = 0
+        mongo_mod.price_history.return_value.find_one.return_value = None
+        mongo_mod.price_history.return_value.delete_many.return_value.deleted_count = 0
         index_ingestor.ingest_index("VIX", client=av, mode="auto")
     av.index_data.assert_called_once()
     av.time_series_daily_adjusted.assert_not_called()

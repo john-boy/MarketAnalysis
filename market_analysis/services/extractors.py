@@ -163,7 +163,7 @@ def extract(name: str, *, progress=None) -> tuple[list[dict[str, Any]], ExtractR
     )
 
     rows: list[dict[str, Any]] = []
-    coll = mongo.daily_quotes()
+    coll = mongo.price_history()
     proj = {
         "_id": 0,
         "date": 1,

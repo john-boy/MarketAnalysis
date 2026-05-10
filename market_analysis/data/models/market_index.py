@@ -10,7 +10,7 @@ DJI, etc.).  We track it in one of two modes:
   time-series storage.
 - **Direct mode** — the index has its own price series fetched from
   the data provider (VIX).  ``fetch_symbol`` is the provider-specific
-  identifier; ``daily_quotes`` stores rows under the index's own
+  identifier; ``price_history`` stores rows under the index's own
   symbol.
 
 ``proxy_symbol`` and ``fetch_symbol`` are mutually exclusive: set one
@@ -75,7 +75,7 @@ class MarketIndex(MongoModel):
 
     @property
     def price_source_symbol(self) -> str:
-        """Symbol under which this index's price data is *stored* in daily_quotes.
+        """Symbol under which this index's price data is *stored* in price_history.
 
         - Proxy mode: the proxy ETF's symbol (SPY for SPX).
         - Direct mode: the index's own symbol (VIX for VIX).
