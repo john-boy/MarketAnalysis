@@ -7,7 +7,7 @@ from textwrap import dedent
 
 import pytest
 
-from market_analysis.services import config as config_mod
+from market_analysis import config as config_mod
 
 
 @pytest.fixture(autouse=True)

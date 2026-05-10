@@ -57,7 +57,7 @@ from market_analysis.app.widgets.ingest_worker import (
 from market_analysis.data.models import Extractor, MarketIndex
 from market_analysis.services import extractors as extractors_svc
 from market_analysis.services import queries
-from market_analysis.services.config import get_settings
+from market_analysis.config import get_settings
 from market_analysis.services.ingestors import daily as daily_svc
 from market_analysis.services.ingestors import etf as etf_ingestor
 from market_analysis.services.ingestors import indexes as index_ingestor

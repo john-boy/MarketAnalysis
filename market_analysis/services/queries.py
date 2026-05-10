@@ -33,7 +33,7 @@ class DBHealth:
 
 def db_health() -> DBHealth:
     """Return connectivity + per-collection document counts."""
-    from market_analysis.services.config import get_settings
+    from market_analysis.config import get_settings
     s = get_settings()
 
     if not mongo.ping(timeout_ms=500):

@@ -24,6 +24,7 @@ dev = [
     "pytest>=8.3",
     "pytest-qt>=4.4",
     "ruff>=0.7",
+    "import-linter>=2.0",
 ]
 # Apple Silicon GPU/unified-memory backend for indicator math.  Optional:
 # set MARKET_ANALYSIS_BACKEND=mlx at runtime to activate; falls back to
@@ -45,3 +46,23 @@ include = ["market_analysis*"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+
+# -- Layered-architecture contract --------------------------------------
+# Run with: lint-imports
+# Layers, lowest to highest:
+#   1. config           — settings loader; foundation, depends on nothing internal
+#   2. data, sources    — siblings; storage models / external API adapters
+#   3. services         — business logic; depends on the layers above
+#   4. app              — UI leaf; can depend on everything
+[tool.importlinter]
+root_package = "market_analysis"
+
+[[tool.importlinter.contracts]]
+name = "Layered architecture"
+type = "layers"
+layers = [
+    "market_analysis.app",
+    "market_analysis.services",
+    "market_analysis.data | market_analysis.sources",
+    "market_analysis.config",
+]

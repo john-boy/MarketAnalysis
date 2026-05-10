@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 
 # -- Filesystem layout ----------------------------------------------------
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_DIR = PROJECT_ROOT / "config"
 SETTINGS_PATH = CONFIG_DIR / "settings.toml"
 SECRETS_PATH = CONFIG_DIR / "secrets.toml"

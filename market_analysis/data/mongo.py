@@ -12,7 +12,7 @@ Usage::
         ...
 
 All accessors read the configured DB name lazily, so
-``market_analysis.services.config`` changes (via
+``market_analysis.config`` changes (via
 ``reload_settings``) are reflected on the next call.
 """
 
@@ -24,7 +24,7 @@ from pymongo import MongoClient
 from pymongo.collection import Collection
 from pymongo.database import Database
 
-from market_analysis.services.config import get_settings
+from market_analysis.config import get_settings
 
 
 # -- Collection name constants --------------------------------------------

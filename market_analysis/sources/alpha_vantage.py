@@ -40,7 +40,7 @@ from typing import Any, Iterable
 
 import requests
 
-from market_analysis.services.config import PROJECT_ROOT, get_settings
+from market_analysis.config import PROJECT_ROOT, get_settings
 
 
 log = logging.getLogger(__name__)
