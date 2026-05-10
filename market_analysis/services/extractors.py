@@ -13,6 +13,15 @@ pipeline::
 
     date, volume, low, open, close, adjusted_close, high, candle, symbol, weight
 
+**Adjusted values under raw column names.** The OHLCV columns carry
+the split/dividend-adjusted values (``adj_open`` -> ``open``,
+``adj_high`` -> ``high``, etc.) so downstream consumers always see a
+continuous series across split boundaries. ``adjusted_close`` is
+populated from ``adj_close`` (the two are identical by definition).
+``candle`` is populated from ``adj_candle``. Raw, unadjusted values
+are used only as a fallback for legacy docs that lack the ``adj_*``
+fields — the WyckoffDB migration writes them on every new bar.
+
 For ETF-kind extractors, ``weight`` is the constituent's weight in
 the ETF as reported by the AV holdings list; SPY and the ETF symbol
 itself carry ``None``.  Rotation-kind extractors carry ``None`` for
@@ -167,15 +176,18 @@ def extract(name: str, *, progress=None) -> tuple[list[dict[str, Any]], ExtractR
     proj = {
         "_id": 0,
         "date": 1,
-        "open": 1,
-        "high": 1,
-        "low": 1,
-        "close": 1,
-        "adjusted_close": 1,
-        "volume": 1,
-        "candle": 1,
+        # adj_* are the values we emit; raw fields are a defensive
+        # fallback for any doc that pre-dates the WyckoffDB migration.
+        "adj_open": 1, "adj_high": 1, "adj_low": 1,
+        "adj_close": 1, "adj_volume": 1, "adj_candle": 1,
+        "open": 1, "high": 1, "low": 1, "close": 1,
+        "volume": 1, "adjusted_close": 1, "candle": 1,
         "metadata.symbol": 1,
     }
+
+    def _pick(doc: dict, adj_key: str, raw_key: str) -> Any:
+        v = doc.get(adj_key)
+        return v if v is not None else doc.get(raw_key)
 
     for sym, weight in pairs:
         cur = coll.find(
@@ -184,15 +196,16 @@ def extract(name: str, *, progress=None) -> tuple[list[dict[str, Any]], ExtractR
         ).sort("date", 1)
         n = 0
         for doc in cur:
+            adj_close = _pick(doc, "adj_close", "adjusted_close")
             rows.append({
                 "date": doc.get("date"),
-                "volume": doc.get("volume"),
-                "low": doc.get("low"),
-                "open": doc.get("open"),
-                "close": doc.get("close"),
-                "adjusted_close": doc.get("adjusted_close"),
-                "high": doc.get("high"),
-                "candle": doc.get("candle"),
+                "volume": _pick(doc, "adj_volume", "volume"),
+                "low": _pick(doc, "adj_low", "low"),
+                "open": _pick(doc, "adj_open", "open"),
+                "close": adj_close,
+                "adjusted_close": adj_close,
+                "high": _pick(doc, "adj_high", "high"),
+                "candle": _pick(doc, "adj_candle", "candle"),
                 "symbol": sym,
                 "weight": weight,
             })

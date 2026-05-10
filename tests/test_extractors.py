@@ -120,14 +120,20 @@ def test_extract_builds_rows_with_columns():
     quote_rows = [
         {
             "date": datetime(2020, 1, 2, tzinfo=timezone.utc),
-            "open": 1.0, "high": 2.0, "low": 0.5, "close": 1.5,
-            "adjusted_close": 1.4, "volume": 1000.0, "candle": 0.1,
+            # Raw values that should NOT appear in output.
+            "open": 100.0, "high": 200.0, "low": 50.0, "close": 150.0,
+            "adjusted_close": 1.4, "volume": 100_000.0, "candle": 50.0,
+            # adj_* values that should appear under the OHLCV column names.
+            "adj_open": 1.0, "adj_high": 2.0, "adj_low": 0.5,
+            "adj_close": 1.4, "adj_volume": 1000, "adj_candle": 0.1,
             "metadata": {"symbol": "SPY"},
         },
         {
             "date": datetime(2020, 1, 2, tzinfo=timezone.utc),
-            "open": 10.0, "high": 11.0, "low": 9.0, "close": 10.5,
-            "adjusted_close": 10.4, "volume": 500.0, "candle": -0.2,
+            "open": 100.0, "high": 110.0, "low": 90.0, "close": 105.0,
+            "adjusted_close": 10.4, "volume": 50_000.0, "candle": 5.0,
+            "adj_open": 10.0, "adj_high": 11.0, "adj_low": 9.0,
+            "adj_close": 10.4, "adj_volume": 500, "adj_candle": -0.2,
             "metadata": {"symbol": "XLB"},
         },
     ]
@@ -145,6 +151,40 @@ def test_extract_builds_rows_with_columns():
     assert all("extractor" not in r for r in rows)
     assert all(r["weight"] is None for r in rows)  # rotation kind → no weights
     assert all(set(r) >= set(ex.COLUMNS) for r in rows)
+
+    # OHLCV columns must carry the adj_* values, not the raw ones.
+    spy = next(r for r in rows if r["symbol"] == "SPY")
+    assert spy["open"] == 1.0
+    assert spy["high"] == 2.0
+    assert spy["low"] == 0.5
+    assert spy["close"] == 1.4
+    assert spy["adjusted_close"] == 1.4
+    assert spy["volume"] == 1000
+    assert spy["candle"] == 0.1
+
+
+def test_extract_falls_back_to_raw_when_adj_missing():
+    """Defensive: legacy bars without adj_* still extract under the raw values."""
+    rec = Extractor(
+        name="rot", kind="rotation",
+        symbols=["XLB"], start_date=_start(),
+    )
+    quote_rows = [{
+        "date": datetime(2020, 1, 2, tzinfo=timezone.utc),
+        "open": 1.0, "high": 2.0, "low": 0.5, "close": 1.5,
+        "adjusted_close": 1.4, "volume": 1000.0, "candle": 0.1,
+        # No adj_* fields at all.
+        "metadata": {"symbol": "SPY"},
+    }]
+    quotes_coll = _FakeColl(rows=quote_rows)
+    extractors_coll = _FakeColl(doc=rec.to_mongo())
+    with patch.object(ex.mongo, "extractors", return_value=extractors_coll), \
+         patch.object(ex.mongo, "price_history", return_value=quotes_coll):
+        rows, _ = ex.extract("rot")
+    spy = next(r for r in rows if r["symbol"] == "SPY")
+    assert spy["open"] == 1.0
+    assert spy["close"] == 1.4   # falls through to adjusted_close
+    assert spy["volume"] == 1000.0
 
 
 def test_extract_records_missing_symbols():
