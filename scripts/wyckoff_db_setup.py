@@ -56,6 +56,15 @@ INDEXES: dict[str, list[tuple[list[tuple[str, int]], dict]]] = {
     mongo.WATCHLIST: [
         ([("symbol", ASCENDING)], {"unique": True, "name": "symbol"}),
     ],
+    mongo.INDEXES: [
+        ([("symbol", ASCENDING)], {"unique": True, "name": "symbol"}),
+    ],
+    mongo.INDICATORS: [
+        ([("metadata.symbol", ASCENDING),
+          ("metadata.indicator", ASCENDING),
+          ("date", ASCENDING)],
+         {"name": "metadata_symbol_indicator_date"}),
+    ],
     mongo.SPLITS_EVENTS: [
         ([("symbol", ASCENDING), ("effective_date", ASCENDING)],
          {"unique": True, "name": "symbol_effective_date"}),
@@ -89,10 +98,13 @@ INDEXES: dict[str, list[tuple[list[tuple[str, int]], dict]]] = {
 }
 
 #: Reference collections to migrate from MarketAnalysis.
+#: ``indexes`` is included as a pragmatic carryover (spec said don't migrate,
+#: but index ingestion would otherwise break — see docs/decisions.md).
 REFERENCE_COLLECTIONS: tuple[str, ...] = (
     mongo.COMPANIES,
     mongo.ETF,
     mongo.WATCHLIST,
+    mongo.INDEXES,
 )
 
 
@@ -122,27 +134,30 @@ def _collection_type(dst: Database, name: str) -> str | None:
 def _create_collections(dst: Database, *, force: bool, report: Report) -> None:
     existing = _existing_collections(dst)
 
-    # price_history — time-series, must be created explicitly
-    name = mongo.PRICE_HISTORY
-    if name in existing:
-        existing_type = _collection_type(dst, name)
-        if existing_type != "timeseries":
-            if not force:
-                print(
-                    f"ERROR: {name} exists but is not time-series "
-                    f"(type={existing_type}). Rerun with --force to recreate."
-                )
-                sys.exit(1)
-            dst.drop_collection(name)
-            existing.discard(name)
-            print(f"  dropped {name} (--force, wrong type)")
-    if name not in existing:
-        dst.create_collection(name, timeseries=mongo.TIMESERIES_OPTIONS[name])
-        report.created.append(f"{name} (timeseries)")
+    # Time-series collections must be created explicitly (otherwise Mongo
+    # auto-creates them as regular collections on first insert).
+    for name in mongo.TIMESERIES_OPTIONS:
+        if name not in mongo.WYCKOFF_COLLECTIONS:
+            continue
+        if name in existing:
+            existing_type = _collection_type(dst, name)
+            if existing_type != "timeseries":
+                if not force:
+                    print(
+                        f"ERROR: {name} exists but is not time-series "
+                        f"(type={existing_type}). Rerun with --force to recreate."
+                    )
+                    sys.exit(1)
+                dst.drop_collection(name)
+                existing.discard(name)
+                print(f"  dropped {name} (--force, wrong type)")
+        if name not in existing:
+            dst.create_collection(name, timeseries=mongo.TIMESERIES_OPTIONS[name])
+            report.created.append(f"{name} (timeseries)")
 
     # Regular collections
     for name in mongo.WYCKOFF_COLLECTIONS:
-        if name == mongo.PRICE_HISTORY:
+        if name in mongo.TIMESERIES_OPTIONS:
             continue
         if name not in existing:
             dst.create_collection(name)
@@ -209,8 +224,8 @@ def _verify(dst: Database, report: Report) -> None:
 
 
 def run(*, force: bool = False, dry_run: bool = False) -> Report:
-    src = mongo.db()                # MarketAnalysis (configured default)
-    dst = mongo.wyckoff_db()        # WyckoffDB
+    src = mongo.market_analysis_db()   # legacy DB (read-only here)
+    dst = mongo.db()                   # WyckoffDB (settings.toml default)
     report = Report()
     start = time.monotonic()
 

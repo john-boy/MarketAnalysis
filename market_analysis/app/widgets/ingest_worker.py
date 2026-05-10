@@ -99,9 +99,9 @@ class DailyWorker(_BaseWorker):
 
 
 def _has_price_history(symbol: str) -> bool:
-    """True when ``daily_quotes`` already holds at least one row for ``symbol``."""
+    """True when ``price_history`` already holds at least one row for ``symbol``."""
     return (
-        mongo.daily_quotes().find_one(
+        mongo.price_history().find_one(
             {"metadata.symbol": symbol}, projection={"_id": 1}
         )
         is not None

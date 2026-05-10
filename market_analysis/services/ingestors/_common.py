@@ -36,6 +36,33 @@ def is_tradeable_symbol(symbol: str | None) -> bool:
     return symbol.strip().upper() not in _NON_TRADEABLE_SYMBOLS
 
 
+def derive_asset_type(symbol: str) -> str:
+    """Return ``"etf"``, ``"index"``, or ``"equity"`` for ``symbol``.
+
+    Decision order (per WYCKOFF_CODE_SPEC.md Change 4):
+      1. Symbol present in the ``etf`` collection      -> "etf"
+      2. Watchlist entry with ``ingest_tags`` "index"  -> "index"
+      3. Tracked in the ``indexes`` collection         -> "index"
+      4. Otherwise                                     -> "equity"
+
+    Looked up at call time so newly-added watchlist tags or ETFs are
+    picked up without a restart.
+    """
+    from market_analysis.data import mongo
+
+    sym = (symbol or "").upper()
+    if mongo.etf().count_documents({"symbol": sym}, limit=1):
+        return "etf"
+    wl = mongo.watchlist().find_one(
+        {"symbol": sym}, {"ingest_tags": 1, "_id": 0}
+    )
+    if wl and "index" in {t.lower() for t in (wl.get("ingest_tags") or [])}:
+        return "index"
+    if mongo.indexes().count_documents({"symbol": sym}, limit=1):
+        return "index"
+    return "equity"
+
+
 def compute_adj_fields(doc: dict) -> dict:
     """Compute split/dividend-adjusted OHLCV fields for one quote doc.
 

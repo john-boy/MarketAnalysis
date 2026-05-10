@@ -131,20 +131,25 @@ class IndicatorReport:
 
 
 def _load_quote_series(symbol: str) -> tuple[list[datetime], list[float]]:
-    """Return aligned ``(dates, adjusted_close)`` for ``symbol``, ascending.
+    """Return aligned ``(dates, adj_close)`` for ``symbol``, ascending.
 
-    Falls back to ``close`` when ``adjusted_close`` is missing or NaN.
+    Reads ``price_history``: prefers the WyckoffDB-computed ``adj_close``
+    (split + dividend adjusted), falling back to ``adjusted_close`` and
+    finally raw ``close`` for safety. Indicators must use adjusted prices
+    so EMAs / RSIs are continuous across split boundaries.
     """
-    coll = mongo.daily_quotes()
+    coll = mongo.price_history()
     cur = coll.find(
         {"metadata.symbol": symbol},
-        {"date": 1, "adjusted_close": 1, "close": 1, "_id": 0},
+        {"date": 1, "adj_close": 1, "adjusted_close": 1, "close": 1, "_id": 0},
     ).sort("date", 1)
 
     dates: list[datetime] = []
     closes: list[float] = []
     for doc in cur:
-        price = doc.get("adjusted_close")
+        price = doc.get("adj_close")
+        if price is None or (isinstance(price, float) and math.isnan(price)):
+            price = doc.get("adjusted_close")
         if price is None or (isinstance(price, float) and math.isnan(price)):
             price = doc.get("close")
         if price is None or (isinstance(price, float) and math.isnan(price)):

@@ -71,7 +71,7 @@ def test_ingest_index_proxy_ok(fake_rec_proxy):
     with patch.object(ix, "_load_index", return_value=fake_rec_proxy), \
          patch.object(ix, "_stamp") as stamp, \
          patch.object(ix, "mongo") as mongo_mod:
-        mongo_mod.daily_quotes.return_value.find_one.return_value = {
+        mongo_mod.price_history.return_value.find_one.return_value = {
             "date": "2024-01-03",
         }
         r = ix.ingest_index("SPX")
@@ -86,7 +86,7 @@ def test_ingest_index_proxy_missing_data(fake_rec_proxy):
     with patch.object(ix, "_load_index", return_value=fake_rec_proxy), \
          patch.object(ix, "_stamp") as stamp, \
          patch.object(ix, "mongo") as mongo_mod:
-        mongo_mod.daily_quotes.return_value.find_one.return_value = None
+        mongo_mod.price_history.return_value.find_one.return_value = None
         r = ix.ingest_index("SPX")
     assert r.error is not None
     assert "proxy" in r.error.lower()

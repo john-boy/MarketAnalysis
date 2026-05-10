@@ -60,9 +60,8 @@ def _build_asset_type_lookup() -> dict[str, str]:
     """
     out: dict[str, str] = {}
 
-    # Source collections live under MarketAnalysis (still authoritative
-    # at this point); WyckoffDB has the migrated copies but either is fine.
-    src = mongo.db()
+    # Source collections live under the legacy MarketAnalysis DB.
+    src = mongo.market_analysis_db()
     for d in src[mongo.ETF].find({}, {"symbol": 1, "_id": 0}):
         if sym := d.get("symbol"):
             out[sym.upper()] = "etf"
@@ -105,18 +104,18 @@ def _drop_and_recreate_tsc(dst) -> None:
 
 
 def _migrate(*, force: bool, dry_run: bool, limit: int | None) -> Report:
-    src = mongo.db()
-    dst = mongo.wyckoff_db()
+    src = mongo.market_analysis_db()
+    dst = mongo.db()                   # WyckoffDB
     report = Report()
     start = time.monotonic()
 
-    src_col = src[mongo.DAILY_QUOTES]
+    src_col = src["daily_quotes"]
     tgt_col = dst[mongo.PRICE_HISTORY]
 
     report.source_count = src_col.estimated_document_count()
     existing = tgt_col.estimated_document_count()
 
-    print(f"Source:  {src.name}.{mongo.DAILY_QUOTES}  ({report.source_count:,} docs)")
+    print(f"Source:  {src.name}.daily_quotes  ({report.source_count:,} docs)")
     print(f"Target:  {dst.name}.{mongo.PRICE_HISTORY}  ({existing:,} docs)")
     if limit:
         print(f"Limit:   first {limit:,} docs")

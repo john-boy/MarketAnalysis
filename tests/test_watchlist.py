@@ -120,7 +120,7 @@ def test_list_watchlist_enriches_with_last_quote_date():
     dq_coll.find_one.side_effect = _find_one
 
     with patch("market_analysis.services.queries.mongo.watchlist", return_value=wl_coll), \
-         patch("market_analysis.services.queries.mongo.daily_quotes", return_value=dq_coll):
+         patch("market_analysis.services.queries.mongo.price_history", return_value=dq_coll):
         rows = queries.list_watchlist()
 
     assert len(rows) == 2

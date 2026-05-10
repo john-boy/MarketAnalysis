@@ -32,7 +32,7 @@ SECRETS_PATH = CONFIG_DIR / "secrets.toml"
 
 class MongoSettings(BaseModel):
     uri: str = "mongodb://localhost:27017"
-    database: str = "MarketAnalysis"
+    database: str = "WyckoffDB"
     prototype_database: str = "MarketAnalysis_Prototype"
 
 

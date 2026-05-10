@@ -135,7 +135,7 @@ def test_extract_builds_rows_with_columns():
     extractors_coll = _FakeColl(doc=rec.to_mongo())
 
     with patch.object(ex.mongo, "extractors", return_value=extractors_coll), \
-         patch.object(ex.mongo, "daily_quotes", return_value=quotes_coll):
+         patch.object(ex.mongo, "price_history", return_value=quotes_coll):
         rows, report = ex.extract("rot")
 
     assert report.total_rows == 2
@@ -155,7 +155,7 @@ def test_extract_records_missing_symbols():
     quotes_coll = _FakeColl(rows=[])
     extractors_coll = _FakeColl(doc=rec.to_mongo())
     with patch.object(ex.mongo, "extractors", return_value=extractors_coll), \
-         patch.object(ex.mongo, "daily_quotes", return_value=quotes_coll):
+         patch.object(ex.mongo, "price_history", return_value=quotes_coll):
         _, report = ex.extract("rot")
     assert report.total_rows == 0
     assert set(report.missing_symbols) == {"SPY", "XLB"}

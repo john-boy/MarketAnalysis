@@ -8,7 +8,7 @@ Usage::
 
     from market_analysis.data import mongo
 
-    for quote in mongo.daily_quotes().find({"symbol": "SPY"}):
+    for quote in mongo.price_history().find({"symbol": "SPY"}):
         ...
 
 All accessors read the configured DB name lazily, so
@@ -33,7 +33,6 @@ from market_analysis.services.config import get_settings
 COMPANIES = "companies"
 ETF = "etf"
 INDEXES = "indexes"
-DAILY_QUOTES = "daily_quotes"
 INDICATORS = "indicators"
 THEME_GROUPS = "theme_groups"
 THEMES = "themes"
@@ -48,7 +47,10 @@ PIPELINE_DEFINITIONS = "pipeline_definitions"
 EXTRACTORS = "extractors"
 SCHEMA_VERSION = "schema_version"
 
-# -- WyckoffDB (target of in-flight migration; see docs/WYCKOFF_CODE_SPEC.md) --
+# -- WyckoffDB additions (see docs/WYCKOFF_CODE_SPEC.md) ------------------
+# These collections live alongside the carried-forward MarketAnalysis ones
+# (companies, etf, watchlist, indexes, indicators) which keep their names
+# but now resolve against WyckoffDB once settings.toml is flipped.
 
 WYCKOFF_DB_NAME = "WyckoffDB"
 
@@ -66,20 +68,14 @@ PROJECTIONS = "projections"
 #: ``{date, metadata: {...}, ...}``, leaving the declaration unused).
 #: See ADR-0008.
 TIMESERIES_OPTIONS: dict[str, dict] = {
-    "daily_quotes": {
+    PRICE_HISTORY: {
         "timeField": "date",
         "metaField": "metadata",
         # 1-day buckets, mirroring the prototype exactly.
         "bucketRoundingSeconds": 86400,
         "bucketMaxSpanSeconds": 86400,
     },
-    "indicators": {
-        "timeField": "date",
-        "metaField": "metadata",
-        "bucketRoundingSeconds": 86400,
-        "bucketMaxSpanSeconds": 86400,
-    },
-    PRICE_HISTORY: {
+    INDICATORS: {
         "timeField": "date",
         "metaField": "metadata",
         "bucketRoundingSeconds": 86400,
@@ -88,10 +84,15 @@ TIMESERIES_OPTIONS: dict[str, dict] = {
 }
 
 #: Every WyckoffDB collection. Used by the setup script.
+#: ``indexes`` and ``indicators`` are pragmatic carryovers: spec said not
+#: to migrate them, but index ingestion would break and we want the
+#: indicators TSC ready for fresh adj_close-based recompute.
 WYCKOFF_COLLECTIONS: tuple[str, ...] = (
     PRICE_HISTORY,
+    INDICATORS,
     COMPANIES,
     ETF,
+    INDEXES,
     WATCHLIST,
     SPLITS_EVENTS,
     FEATURES,
@@ -100,12 +101,13 @@ WYCKOFF_COLLECTIONS: tuple[str, ...] = (
     PROJECTIONS,
 )
 
-#: Every collection the migration creates.  Order is informational.
+#: Every collection name from the legacy MarketAnalysis schema.
+#: Retained for read-side enumeration (e.g. db_health iteration of any
+#: lingering collection); WyckoffDB setup uses ``WYCKOFF_COLLECTIONS``.
 ALL_COLLECTIONS: tuple[str, ...] = (
     COMPANIES,
     ETF,
     INDEXES,
-    DAILY_QUOTES,
     INDICATORS,
     THEME_GROUPS,
     THEMES,
@@ -149,13 +151,13 @@ def prototype_db() -> Database:
     return client()[s.mongo.prototype_database]
 
 
-def wyckoff_db() -> Database:
-    """Return the WyckoffDB ``Database`` handle.
+def market_analysis_db() -> Database:
+    """Return the legacy MarketAnalysis DB (transition migration source).
 
-    Used during the MarketAnalysis → WyckoffDB transition. After cutover
-    this is identical to :func:`db` and can be removed.
+    Used by the one-shot transition scripts in ``scripts/wyckoff_*``.
+    Remove after PR 4 cutover.
     """
-    return client()[WYCKOFF_DB_NAME]
+    return client()["MarketAnalysis"]
 
 
 def ping(timeout_ms: int = 1000) -> bool:
@@ -182,10 +184,6 @@ def etf() -> Collection:
 
 def indexes() -> Collection:
     return db()[INDEXES]
-
-
-def daily_quotes() -> Collection:
-    return db()[DAILY_QUOTES]
 
 
 def indicators() -> Collection:
@@ -240,31 +238,28 @@ def schema_version() -> Collection:
     return db()[SCHEMA_VERSION]
 
 
-# -- WyckoffDB typed accessors --------------------------------------------
-# These resolve against WyckoffDB explicitly, regardless of the configured
-# default database. They will be the only price/feature accessors after
-# cutover; until then they coexist with the legacy MarketAnalysis ones.
+# -- WyckoffDB additions (price_history, splits, features, etc.) ---------
 
 
 def price_history() -> Collection:
-    return wyckoff_db()[PRICE_HISTORY]
+    return db()[PRICE_HISTORY]
 
 
 def splits_events() -> Collection:
-    return wyckoff_db()[SPLITS_EVENTS]
+    return db()[SPLITS_EVENTS]
 
 
 def features() -> Collection:
-    return wyckoff_db()[FEATURES]
+    return db()[FEATURES]
 
 
 def phase_labels() -> Collection:
-    return wyckoff_db()[PHASE_LABELS]
+    return db()[PHASE_LABELS]
 
 
 def transitions() -> Collection:
-    return wyckoff_db()[TRANSITIONS]
+    return db()[TRANSITIONS]
 
 
 def projections() -> Collection:
-    return wyckoff_db()[PROJECTIONS]
+    return db()[PROJECTIONS]

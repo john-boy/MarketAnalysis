@@ -4,7 +4,7 @@ Idempotent.  Creates the collection and its unique ``symbol`` index if
 missing, then upserts the seed records (``$setOnInsert`` only, so
 user edits to existing rows are preserved).
 
-Run once after ``migrate_from_prototype.py`` has landed the base
+Run once after the WyckoffDB transition (see docs/WYCKOFF_CODE_SPEC.md) has landed the base
 schema; safe to re-run at any time.
 
 Usage::

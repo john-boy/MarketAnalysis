@@ -1,6 +1,6 @@
 """Company tab — single-ticker detail view.
 
-Left: filterable list of symbols present in ``daily_quotes``.
+Left: filterable list of symbols present in ``price_history``.
 Right: a stacked chart with a price panel (adjusted close + three
 EMA overlays) and a linked RSI panel below it (0-100, 30/70 lines);
 a visibility toggle row above the chart controls which traces are

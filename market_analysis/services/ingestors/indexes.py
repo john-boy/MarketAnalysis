@@ -8,7 +8,7 @@ on the index's mode (see :class:`MarketIndex`):
   only verify the proxy has data and stamp ``last_ingested`` so the
   Admin UI can surface the relationship honestly.
 - **Direct mode** (VIX).  Fetch Alpha Vantage under ``fetch_symbol``;
-  store under the index's own ``symbol`` in ``daily_quotes``.  Reuses
+  store under the index's own ``symbol`` in ``price_history``.  Reuses
   the price ingestor's auto/full incremental logic.
 
 Errors are captured on the index record (``last_error``) so the UI
@@ -86,7 +86,7 @@ def ingest_index(
     if rec.mode == "proxy":
         proxy = rec.proxy_symbol
         assert proxy is not None  # invariant: enforced by the model validator
-        proxy_last = mongo.daily_quotes().find_one(
+        proxy_last = mongo.price_history().find_one(
             {"metadata.symbol": proxy},
             sort=[("date", -1)],
             projection={"date": 1, "_id": 0},
@@ -162,7 +162,7 @@ def _ingest_direct_with_alias(
         _last_stored_date,
         _parse_index_daily,
     )
-    coll = mongo.daily_quotes()
+    coll = mongo.price_history()
     last = _last_stored_date(canonical)
 
     payload = av.index_data(fetch_sym, interval="daily")
@@ -181,9 +181,14 @@ def _ingest_direct_with_alias(
             last_date=docs[-1]["date"] if docs else None,
         )
 
-    # incremental
+    # incremental — TSC-safe upsert (spec Change 5)
     new_docs = [d for d in docs if d["date"] > last]
     if new_docs:
+        min_d, max_d = new_docs[0]["date"], new_docs[-1]["date"]
+        coll.delete_many({
+            "metadata.symbol": canonical,
+            "date": {"$gte": min_d, "$lte": max_d},
+        })
         coll.insert_many(new_docs, ordered=False)
     return price_ingestor.PriceIngestReport(
         symbol=canonical,
@@ -214,7 +219,7 @@ def add_index(idx: MarketIndex) -> bool:
 def remove_index(symbol: str) -> bool:
     """Remove a tracked index.  Returns True if a record was deleted.
 
-    Does **not** delete any `daily_quotes` data written under the
+    Does **not** delete any `price_history` data written under the
     index's symbol (direct-mode indexes); that history is preserved
     unless the user explicitly cleans it up.
     """
