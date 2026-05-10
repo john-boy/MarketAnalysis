@@ -36,5 +36,8 @@ logs/
 # Local data dumps
 data_dumps/
 
+# Extractor outputs (regeneratable; never commit)
+extracts/
+
 # Claude Code runtime artifacts
 .claude/scheduled_tasks.lock
