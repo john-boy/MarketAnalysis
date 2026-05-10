@@ -97,7 +97,14 @@
       "Bash(python -c \"from scripts import wyckoff_backfill_splits; print\\('import OK'\\)\")",
       "Bash(python -m scripts.wyckoff_backfill_splits --dry-run --watchlist-only)",
       "Bash(python -m scripts.wyckoff_recompute_indicators --dry-run --watchlist-only)",
-      "Bash(python -m scripts.wyckoff_recompute_indicators)"
+      "Bash(python -m scripts.wyckoff_recompute_indicators)",
+      "Bash(kill 43594)",
+      "Bash(python -u -m scripts.wyckoff_recompute_indicators)",
+      "Bash(echo \"PID: $!\")",
+      "Bash(ps -p 44245 -o pid,pcpu,pmem,etime,command)",
+      "Bash(python -c ' *)",
+      "Bash(ps -p 44245 -o pid,etime,command)",
+      "Bash(ps -p 44245 -o pid,pcpu,pmem,etime,stat,command)"
     ]
   }
 }
