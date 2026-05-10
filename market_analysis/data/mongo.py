@@ -48,9 +48,6 @@ EXTRACTORS = "extractors"
 SCHEMA_VERSION = "schema_version"
 
 # -- WyckoffDB additions (see docs/WYCKOFF_CODE_SPEC.md) ------------------
-# These collections live alongside the carried-forward MarketAnalysis ones
-# (companies, etf, watchlist, indexes, indicators) which keep their names
-# but now resolve against WyckoffDB once settings.toml is flipped.
 
 WYCKOFF_DB_NAME = "WyckoffDB"
 
@@ -101,29 +98,6 @@ WYCKOFF_COLLECTIONS: tuple[str, ...] = (
     PROJECTIONS,
 )
 
-#: Every collection name from the legacy MarketAnalysis schema.
-#: Retained for read-side enumeration (e.g. db_health iteration of any
-#: lingering collection); WyckoffDB setup uses ``WYCKOFF_COLLECTIONS``.
-ALL_COLLECTIONS: tuple[str, ...] = (
-    COMPANIES,
-    ETF,
-    INDEXES,
-    INDICATORS,
-    THEME_GROUPS,
-    THEMES,
-    THEME_DOCUMENTS,
-    WATCHLIST,
-    ACCOUNTS,
-    POSITIONS,
-    ACCOUNT_SYNC_LOG,
-    FILINGS,
-    NEWS,
-    PIPELINE_DEFINITIONS,
-    EXTRACTORS,
-    SCHEMA_VERSION,
-)
-
-
 # -- Connection -----------------------------------------------------------
 
 
@@ -149,15 +123,6 @@ def prototype_db() -> Database:
     """Return the prototype DB (for migration reads)."""
     s = get_settings()
     return client()[s.mongo.prototype_database]
-
-
-def market_analysis_db() -> Database:
-    """Return the legacy MarketAnalysis DB (transition migration source).
-
-    Used by the one-shot transition scripts in ``scripts/wyckoff_*``.
-    Remove after PR 4 cutover.
-    """
-    return client()["MarketAnalysis"]
 
 
 def ping(timeout_ms: int = 1000) -> bool:
