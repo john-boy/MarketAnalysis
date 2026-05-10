@@ -85,7 +85,15 @@
       "Bash(python -m pytest tests/test_extractors.py -x -q)",
       "Bash(chmod +x /Users/jhenry/Workspaces/GitHub/PyCharm/MarketAnalysis/.claude/worktrees/fervent-moser-2711a8/run-extract-all.sh)",
       "Bash(git add *)",
-      "Bash(git commit -m ' *)"
+      "Bash(git commit -m ' *)",
+      "Bash(find . -iname \"*wyckoff*\" 2>/dev/null; find /Users/jhenry/Downloads -iname \"*WYCKOFF*\" 2>/dev/null)",
+      "Bash(cp /Users/jhenry/Downloads/transition_specification/WYCKOFF_CODE_SPEC.md docs/WYCKOFF_CODE_SPEC.md)",
+      "Bash(cp /Users/jhenry/Downloads/transition_specification/WYCKOFF_TRANSITION_CHECKLIST.md docs/WYCKOFF_TRANSITION_CHECKLIST.md)",
+      "Bash(python -c \"from scripts import wyckoff_db_setup; print\\('import OK'\\)\")",
+      "Bash(python -m pytest tests/ -q)",
+      "Bash(python -m pytest tests/ -q --ignore=tests/test_company_tab_range.py)",
+      "Bash(git stash *)",
+      "Bash(python -m pytest tests/test_mongo.py -q --ignore=tests/test_company_tab_range.py)"
     ]
   }
 }

@@ -48,8 +48,19 @@ PIPELINE_DEFINITIONS = "pipeline_definitions"
 EXTRACTORS = "extractors"
 SCHEMA_VERSION = "schema_version"
 
+# -- WyckoffDB (target of in-flight migration; see docs/WYCKOFF_CODE_SPEC.md) --
+
+WYCKOFF_DB_NAME = "WyckoffDB"
+
+PRICE_HISTORY = "price_history"      # TSC; replaces daily_quotes
+SPLITS_EVENTS = "splits_events"
+FEATURES = "features"
+PHASE_LABELS = "phase_labels"
+TRANSITIONS = "transitions"
+PROJECTIONS = "projections"
+
 #: Time-series collections, mapped to their creation options.
-#: Both are daily data; the prototype was bucket-per-day and we mirror that.
+#: All are daily data; the prototype was bucket-per-day and we mirror that.
 #: ``metaField='metadata'`` tracks the real document shape (the prototype
 #: collections declared ``'symbol'`` / ``'indicator'`` but wrote
 #: ``{date, metadata: {...}, ...}``, leaving the declaration unused).
@@ -68,7 +79,26 @@ TIMESERIES_OPTIONS: dict[str, dict] = {
         "bucketRoundingSeconds": 86400,
         "bucketMaxSpanSeconds": 86400,
     },
+    PRICE_HISTORY: {
+        "timeField": "date",
+        "metaField": "metadata",
+        "bucketRoundingSeconds": 86400,
+        "bucketMaxSpanSeconds": 86400,
+    },
 }
+
+#: Every WyckoffDB collection. Used by the setup script.
+WYCKOFF_COLLECTIONS: tuple[str, ...] = (
+    PRICE_HISTORY,
+    COMPANIES,
+    ETF,
+    WATCHLIST,
+    SPLITS_EVENTS,
+    FEATURES,
+    PHASE_LABELS,
+    TRANSITIONS,
+    PROJECTIONS,
+)
 
 #: Every collection the migration creates.  Order is informational.
 ALL_COLLECTIONS: tuple[str, ...] = (
@@ -117,6 +147,15 @@ def prototype_db() -> Database:
     """Return the prototype DB (for migration reads)."""
     s = get_settings()
     return client()[s.mongo.prototype_database]
+
+
+def wyckoff_db() -> Database:
+    """Return the WyckoffDB ``Database`` handle.
+
+    Used during the MarketAnalysis → WyckoffDB transition. After cutover
+    this is identical to :func:`db` and can be removed.
+    """
+    return client()[WYCKOFF_DB_NAME]
 
 
 def ping(timeout_ms: int = 1000) -> bool:
@@ -199,3 +238,33 @@ def extractors() -> Collection:
 
 def schema_version() -> Collection:
     return db()[SCHEMA_VERSION]
+
+
+# -- WyckoffDB typed accessors --------------------------------------------
+# These resolve against WyckoffDB explicitly, regardless of the configured
+# default database. They will be the only price/feature accessors after
+# cutover; until then they coexist with the legacy MarketAnalysis ones.
+
+
+def price_history() -> Collection:
+    return wyckoff_db()[PRICE_HISTORY]
+
+
+def splits_events() -> Collection:
+    return wyckoff_db()[SPLITS_EVENTS]
+
+
+def features() -> Collection:
+    return wyckoff_db()[FEATURES]
+
+
+def phase_labels() -> Collection:
+    return wyckoff_db()[PHASE_LABELS]
+
+
+def transitions() -> Collection:
+    return wyckoff_db()[TRANSITIONS]
+
+
+def projections() -> Collection:
+    return wyckoff_db()[PROJECTIONS]
