@@ -296,6 +296,18 @@ class AlphaVantageClient:
             use_cache=use_cache,
         )
 
+    def splits(self, symbol: str, *, use_cache: bool | None = None) -> dict[str, Any]:
+        """``SPLITS`` — historical split events for a symbol.
+
+        Used by the WyckoffDB ``splits_events`` backfill (see
+        ``scripts/wyckoff_backfill_splits.py``). AV returns the events
+        most-recent-first under a top-level ``data`` key.
+        """
+        return self._get(
+            {"function": "SPLITS", "symbol": symbol},
+            use_cache=use_cache,
+        )
+
     def overview(self, symbol: str, *, use_cache: bool | None = None) -> dict[str, Any]:
         """``OVERVIEW`` — company fundamentals (sector, market cap, PE, …)."""
         return self._get(

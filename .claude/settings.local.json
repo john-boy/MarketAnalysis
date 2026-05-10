@@ -93,7 +93,11 @@
       "Bash(python -m pytest tests/ -q)",
       "Bash(python -m pytest tests/ -q --ignore=tests/test_company_tab_range.py)",
       "Bash(git stash *)",
-      "Bash(python -m pytest tests/test_mongo.py -q --ignore=tests/test_company_tab_range.py)"
+      "Bash(python -m pytest tests/test_mongo.py -q --ignore=tests/test_company_tab_range.py)",
+      "Bash(python -c \"from scripts import wyckoff_backfill_splits; print\\('import OK'\\)\")",
+      "Bash(python -m scripts.wyckoff_backfill_splits --dry-run --watchlist-only)",
+      "Bash(python -m scripts.wyckoff_recompute_indicators --dry-run --watchlist-only)",
+      "Bash(python -m scripts.wyckoff_recompute_indicators)"
     ]
   }
 }
