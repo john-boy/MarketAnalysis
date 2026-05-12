@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QSplitter,
@@ -37,6 +38,7 @@ from PySide6.QtWidgets import (
 
 from market_analysis.app.widgets.ingest_worker import FundamentalsWorker
 from market_analysis.services import queries
+from market_analysis.services.ingestors import etf as etf_ingestor
 
 
 # Shared chart defaults (dark canvas).  Bright, high-contrast palette.
@@ -133,9 +135,17 @@ class CompanyTab(QWidget):
         font.setBold(True)
         self._symbol_lbl.setFont(font)
         self._range_lbl = QLabel("")
+        self._delete_btn = QPushButton("Delete symbol…")
+        self._delete_btn.setToolTip(
+            "Permanently remove this company and all its price history + indicators. "
+            "Use for orphaned symbols no longer held by any ETF."
+        )
+        self._delete_btn.setEnabled(False)
+        self._delete_btn.clicked.connect(self._on_delete_clicked)
         header.addWidget(self._symbol_lbl)
         header.addStretch(1)
         header.addWidget(self._range_lbl)
+        header.addWidget(self._delete_btn)
         layout.addLayout(header)
 
         # Trace-visibility toggles.
@@ -310,9 +320,69 @@ class CompanyTab(QWidget):
             return
         self._load(items[0].text())
 
+    def _on_delete_clicked(self) -> None:
+        sym = self._current_symbol
+        if not sym:
+            return
+        # Show membership info so the user can spot a non-orphan before they pull the trigger.
+        etf_doc = queries.load_etf(sym)
+        membership = ""
+        memberships = []
+        try:
+            from market_analysis.data import mongo as _mongo
+            doc = _mongo.companies().find_one({"symbol": sym}, {"etf_memberships": 1, "_id": 0})
+            memberships = list(doc.get("etf_memberships") or []) if doc else []
+        except Exception:  # noqa: BLE001
+            pass
+        if memberships:
+            membership = (
+                f"\n\nWARNING: {sym} is still listed as a holding in "
+                f"{', '.join(sorted(memberships))}. Removing it now will leave those "
+                f"ETFs referencing a deleted company until the next daily update."
+            )
+        is_etf = etf_doc is not None
+        if is_etf:
+            membership += (
+                f"\n\nWARNING: {sym} is itself a tracked ETF. Delete it from the "
+                f"Admin → ETFs tab instead so its profile is also cleaned up."
+            )
+
+        resp = QMessageBox.question(
+            self,
+            "Delete symbol",
+            f"Permanently delete {sym}?\n\n"
+            f"This removes the company row, all price history, and all indicators "
+            f"for {sym}. This cannot be undone.{membership}",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if resp != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            counts = etf_ingestor.delete_company(sym)
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.critical(self, "Delete failed", f"{sym}: {e}")
+            return
+
+        QMessageBox.information(
+            self,
+            "Symbol deleted",
+            f"Removed {sym}: "
+            f"company={counts['companies']}, "
+            f"price bars={counts['price_history']:,}, "
+            f"indicator rows={counts['indicators']:,}.",
+        )
+        self._current_symbol = None
+        self._symbol_lbl.setText("—")
+        self._delete_btn.setEnabled(False)
+        self.refresh_symbols()
+        self._apply_filter(self._filter.text())
+
     def _load(self, symbol: str) -> None:
         self._current_symbol = symbol
         self._symbol_lbl.setText(symbol)
+        self._delete_btn.setEnabled(True)
 
         # Cache series so redraws don't re-hit Mongo.
         self._quotes = queries.load_quotes(symbol)

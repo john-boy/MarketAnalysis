@@ -236,16 +236,15 @@ class AdminTab(QWidget):
         w = QWidget()
         layout = QVBoxLayout(w)
 
-        self._etf_table = QTableWidget(0, 2)
-        self._etf_table.setHorizontalHeaderLabels(["Symbol", "Name"])
+        self._etf_table = QTableWidget(0, 3)
+        self._etf_table.setHorizontalHeaderLabels(["Symbol", "Name", "Description"])
         self._etf_table.verticalHeader().setVisible(False)
         self._etf_table.horizontalHeader().setStretchLastSection(True)
         self._etf_table.horizontalHeader().setSectionResizeMode(
             0, QHeaderView.ResizeMode.ResizeToContents
         )
-        # Name (col 1) is editable in-place; symbol (col 0) is not.
-        # Persistence is handled in ``_on_etf_cell_changed`` after the
-        # user commits an edit.
+        # Name (col 1) and Description (col 2) are editable in-place; symbol (col 0) is not.
+        # Persistence is handled in ``_on_etf_cell_changed`` after the user commits an edit.
         self._etf_table.setEditTriggers(
             QTableWidget.EditTrigger.DoubleClicked
             | QTableWidget.EditTrigger.SelectedClicked
@@ -259,14 +258,23 @@ class AdminTab(QWidget):
         self._etf_table_loading = False
         layout.addWidget(self._etf_table, 1)
 
-        # Add / ingest row
-        add_row = QHBoxLayout()
+        # Add / ingest form — Symbol + optional Name + optional Description.
+        add_form = QFormLayout()
         self._etf_add_input = QLineEdit()
         self._etf_add_input.setPlaceholderText("New ETF ticker (e.g. XLF)")
+        self._etf_add_name = QLineEdit()
+        self._etf_add_name.setPlaceholderText("Display name (optional)")
+        self._etf_add_desc = QLineEdit()
+        self._etf_add_desc.setPlaceholderText("Description (optional)")
+        add_form.addRow("Symbol:",      self._etf_add_input)
+        add_form.addRow("Name:",        self._etf_add_name)
+        add_form.addRow("Description:", self._etf_add_desc)
+        layout.addLayout(add_form)
+
+        add_row = QHBoxLayout()
         add_btn = QPushButton("Add + ingest")
         add_btn.clicked.connect(self._on_etf_add_clicked)
-        add_row.addWidget(QLabel("Add:"))
-        add_row.addWidget(self._etf_add_input, 1)
+        add_row.addStretch(1)
         add_row.addWidget(add_btn)
         layout.addLayout(add_row)
 
@@ -689,41 +697,44 @@ class AdminTab(QWidget):
         rows = []
         for sym in etf_ingestor.list_tracked_etfs():
             doc = queries.load_etf(sym) or {}
-            rows.append((sym, doc.get("name") or ""))
+            rows.append((sym, doc.get("name") or "", doc.get("description") or ""))
         self._etf_table_loading = True
         try:
             self._etf_table.setRowCount(len(rows))
-            for i, (sym, name) in enumerate(rows):
+            for i, (sym, name, desc) in enumerate(rows):
                 sym_item = QTableWidgetItem(sym)
                 sym_item.setFlags(sym_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 self._etf_table.setItem(i, 0, sym_item)
-                name_item = QTableWidgetItem(name)
-                # Name (col 1) keeps the default editable flag.
-                self._etf_table.setItem(i, 1, name_item)
+                # Name (col 1) and Description (col 2) keep the default editable flag.
+                self._etf_table.setItem(i, 1, QTableWidgetItem(name))
+                self._etf_table.setItem(i, 2, QTableWidgetItem(desc))
         finally:
             self._etf_table_loading = False
 
     def _on_etf_cell_changed(self, row: int, col: int) -> None:
-        if self._etf_table_loading or col != 1:
+        if self._etf_table_loading or col not in (1, 2):
             return
-        sym_item = self._etf_table.item(row, 0)
-        name_item = self._etf_table.item(row, 1)
-        if sym_item is None or name_item is None:
+        sym_item   = self._etf_table.item(row, 0)
+        value_item = self._etf_table.item(row, col)
+        if sym_item is None or value_item is None:
             return
         sym = sym_item.text().strip().upper()
-        new_name = name_item.text().strip()
+        new_value = value_item.text().strip()
+        field_name = "name" if col == 1 else "description"
+        setter = (etf_ingestor.set_etf_name if col == 1
+                  else etf_ingestor.set_etf_description)
         try:
-            ok = etf_ingestor.set_etf_name(sym, new_name or None)
+            ok = setter(sym, new_value or None)
         except Exception as e:  # noqa: BLE001
-            self._log_line(f"ERROR setting name for {sym}: {e}")
+            self._log_line(f"ERROR setting {field_name} for {sym}: {e}")
             return
         if ok:
             self._log_line(
-                f"{sym}: name set to {new_name!r}" if new_name
-                else f"{sym}: name cleared"
+                f"{sym}: {field_name} set to {new_value!r}" if new_value
+                else f"{sym}: {field_name} cleared"
             )
         else:
-            self._log_line(f"WARN: {sym} not found while setting name.")
+            self._log_line(f"WARN: {sym} not found while setting {field_name}.")
 
     def _refresh_index_table(self) -> None:
         rows = queries.list_indexes()
@@ -836,7 +847,32 @@ class AdminTab(QWidget):
         if not sym:
             self._log_line("ERROR: enter an ETF ticker.")
             return
+        name = self._etf_add_name.text().strip()
+        desc = self._etf_add_desc.text().strip()
+
+        # Pre-seed the ETF doc so user-supplied name/description survive
+        # the AV-driven $set in ingest_etf (which preserves non-empty
+        # values for these fields — see _USER_OVERRIDE_FIELDS).
+        if name or desc:
+            preset: dict = {}
+            if name:
+                preset["name"] = name
+            if desc:
+                preset["description"] = desc
+            preset["symbol"] = sym
+            from market_analysis.data import mongo as _mongo
+            _mongo.etf().update_one(
+                {"symbol": sym},
+                {"$set": preset},
+                upsert=True,
+            )
+            self._log_line(
+                f"{sym}: pre-set user fields ({', '.join(k for k in preset if k != 'symbol')})."
+            )
+
         self._etf_add_input.clear()
+        self._etf_add_name.clear()
+        self._etf_add_desc.clear()
         # Adding a new ETF: don't re-pull already-ingested holdings.
         self._run_etf_ingest(sym, limit=None, reingest=False)
 

@@ -56,6 +56,10 @@ class DailyReport:
     indexes_refreshed: list[str] = field(default_factory=list)
     index_errors: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
+    # Reconciliation
+    holdings_dropped: int = 0          # total drops across refreshed ETFs
+    memberships_pulled: int = 0        # company.etf_memberships entries removed
+    orphaned_companies: int = 0        # companies with no etf_memberships
     elapsed_sec: float = 0.0
 
 
@@ -102,7 +106,15 @@ def daily_update(
             rep = etf_ingestor.ingest_etf(sym, client=av)
             union.update(rep.holding_symbols)
             report.etfs_refreshed.append(sym)
-            say(f"  {sym}: {rep.holdings_count} holdings")
+            report.holdings_dropped   += len(rep.dropped_symbols)
+            report.memberships_pulled += rep.memberships_pulled
+            msg = f"  {sym}: {rep.holdings_count} holdings"
+            if rep.dropped_symbols:
+                preview = ', '.join(rep.dropped_symbols[:5])
+                more = '' if len(rep.dropped_symbols) <= 5 else f' (+{len(rep.dropped_symbols) - 5} more)'
+                msg += (f"  dropped {len(rep.dropped_symbols)}: {preview}{more}"
+                        f"  (memberships pulled: {rep.memberships_pulled})")
+            say(msg)
         except AlphaVantageError as e:
             msg = f"{sym}: ETF profile error: {e}"
             say(f"  {msg}")
@@ -117,8 +129,17 @@ def daily_update(
     # Drop cash / N.A. placeholders before anything hits AV.  Also fold
     # the ETF symbols themselves into the panel — SPY/QQQ/etc. are
     # tradeable in their own right and users expect them charted.
+    # Finally, fold in orphaned companies (no ETF membership) so their
+    # price history continues to flow until the user explicitly deletes
+    # them from the Company UI.
     union = {s for s in union if is_tradeable_symbol(s)}
     union.update(etf_symbols)
+    orphans = [s for s in etf_ingestor.list_orphaned_companies() if is_tradeable_symbol(s)]
+    if orphans:
+        union.update(orphans)
+        report.orphaned_companies = len(orphans)
+        say(f"        + {len(orphans)} orphaned compan{'y' if len(orphans) == 1 else 'ies'} "
+            f"(no ETF membership) folded into the panel.")
     symbols = sorted(union)
     if limit_symbols is not None:
         symbols = symbols[:limit_symbols]
@@ -241,6 +262,9 @@ def daily_update(
         f"empty-payload={report.prices_empty_payload} "
         f"ind-updated={report.indicators_updated} "
         f"indexes={len(report.indexes_refreshed)} "
+        f"dropped-holdings={report.holdings_dropped} "
+        f"memberships-pulled={report.memberships_pulled} "
+        f"orphans={report.orphaned_companies} "
         f"errors={len(report.errors) + len(report.index_errors)}"
     )
     return report
