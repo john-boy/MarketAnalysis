@@ -22,3 +22,7 @@ class WatchlistEntry(MongoModel):
     wyckoff_priority: int = 3
     #: When the Wyckoff phase was last evaluated for this symbol.
     last_phase_checked: datetime | None = None
+    #: The Wyckoff phase observed at the last evaluation (e.g. "Markup").
+    #: Populated by the WyckoffPrototype analyzer's write-back; None until
+    #: the first analyze() runs against this symbol.
+    last_phase_observed: str | None = None
