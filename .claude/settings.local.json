@@ -115,7 +115,27 @@
       "Bash(.venv/bin/python -m features.preprocessing)",
       "Bash(ls -lh data/*.parquet)",
       "Bash(ls -d ../data)",
-      "Bash(.venv/bin/python -)"
+      "Bash(.venv/bin/python -)",
+      "Bash(find /Users/jhenry/Workspaces /Users/jhenry/Library/CloudStorage -maxdepth 5 -type d -iname \"*quantstudy*\" 2>/dev/null; echo \"===siblings of QuantModel===\"; ls /Users/jhenry/Workspaces/GitHub/PyCharm/ 2>/dev/null)",
+      "Bash(MPLBACKEND=Agg .venv/bin/python -c \"from studies.scenario_study import run_scenario_study; run_scenario_study\\(collection_key='BarSnapshots'\\)\")",
+      "Bash(.venv/bin/python -m py_compile analysis/trade_sim.py analysis/scenarios.py studies/scenario_study.py visualization/trade_charts.py visualization/path_charts.py studies/candlestick_study.py main.py)",
+      "Bash(MPLBACKEND=Agg .venv/bin/python -c \"from studies.scenario_study import run_scenario_study; run_scenario_study\\(collection_key='BarSnapshots5'\\)\")",
+      "Bash(MPLBACKEND=Agg .venv/bin/python -c \"from studies.walk_forward_study import run_walk_forward_study; run_walk_forward_study\\(collection_key='BarSnapshots5'\\)\")",
+      "Bash(.venv/bin/python -m py_compile analysis/scenarios.py analysis/walk_forward.py)",
+      "Bash(.venv/bin/python -m py_compile analysis/scenarios.py studies/scenario_study.py)",
+      "Bash(MPLBACKEND=Agg .venv/bin/python -c 'from studies.scenario_study import run_scenario_study; run_scenario_study\\(collection_key='\\\\''__TRACKED_VAR__'\\\\''\\)')",
+      "Bash(awk '/Scenario 8|Scenario 9|Scenario 10|Scenario 11/{p=1} p{print; n++; if\\(n>11\\){p=0;n=0}}')",
+      "Bash(.venv/bin/python -m py_compile analysis/scenarios.py analysis/trade_sim.py studies/scenario_study.py)",
+      "Bash(awk '/Scenario 8|Scenario 9|Scenario 12/{p=1; print; n=1; next} p{print; n++; if\\(n>11\\){p=0}}')",
+      "Bash(.venv/bin/python -m py_compile analysis/scenarios.py)",
+      "Bash(awk '/Scenario 1[3-7]:/{p=1} p{print; n++; if\\(n>11\\){p=0;n=0}}')",
+      "Bash(awk '/Scenario 18/{p=1} p{print; n++; if\\(n>13\\){p=0;n=0}}')",
+      "Bash(.venv/bin/python -m py_compile studies/scenario_study.py visualization/trade_charts.py)",
+      "Bash(.venv/bin/python -m py_compile analysis/drawdown.py studies/scenario_study.py visualization/trade_charts.py)",
+      "Bash(.venv/bin/python -m py_compile analysis/drawdown.py analysis/regime.py studies/regime_study.py studies/scenario_wf_study.py studies/scenario_study.py visualization/trade_charts.py main.py)",
+      "Bash(MPLBACKEND=Agg .venv/bin/python -c \"from studies.regime_study import run_regime_backfill; run_regime_backfill\\(collection_key='BarSnapshots', period=14\\)\")",
+      "Bash(.venv/bin/python -m py_compile analysis/regime.py)",
+      "Bash(MPLBACKEND=Agg .venv/bin/python -c \"from studies.regime_study import run_regime_backfill; run_regime_backfill\\(collection_key='BarSnapshots5', period=14\\)\")"
     ]
   }
 }
