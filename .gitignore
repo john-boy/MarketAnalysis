@@ -41,3 +41,5 @@ extracts/
 
 # Claude Code runtime artifacts
 .claude/scheduled_tasks.lock
+.claude/worktrees/silly-mclean-e3ad7e/
+/.claude
