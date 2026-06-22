@@ -16,7 +16,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 # -- Filesystem layout ----------------------------------------------------
@@ -64,6 +64,16 @@ class LoggingSettings(BaseModel):
     level: str = "INFO"
 
 
+class PathsSettings(BaseModel):
+    input_directory: Path = Path("~/Workspaces/Data/input")
+    output_directory: Path = Path("~/Workspaces/Data/processed")
+
+    @field_validator("input_directory", "output_directory", mode="before")
+    @classmethod
+    def expand_home(cls, v: Any) -> Path:
+        return Path(str(v)).expanduser()
+
+
 class Settings(BaseModel):
     """Root settings — one section per concern."""
 
@@ -73,6 +83,7 @@ class Settings(BaseModel):
     alpha_vantage: AlphaVantageSettings = Field(default_factory=AlphaVantageSettings)
     schwab: SchwabSettings = Field(default_factory=SchwabSettings)
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
+    paths: PathsSettings = Field(default_factory=PathsSettings)
 
     # Fields whose values must never appear verbatim in logs / UI.
     _SECRET_FIELDS: tuple[tuple[str, str], ...] = (
