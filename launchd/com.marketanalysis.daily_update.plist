@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.marketanalysis.daily_update</string>
+
+    <!-- Full daily incremental update: all tracked ETFs + their holdings +
+         indexes + indicators. No positional args = every tracked ETF.
+         Indexes (SPX etc.) are included by default; do NOT pass
+         --skip-indexes here. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/jhenry/Workspaces/GitHub/MarketAnalysis/.venv/bin/python</string>
+        <string>-m</string>
+        <string>scripts.daily_update</string>
+    </array>
+
+    <!-- Run from the repo root so `python -m scripts.daily_update` resolves. -->
+    <key>WorkingDirectory</key>
+    <string>/Users/jhenry/Workspaces/GitHub/MarketAnalysis</string>
+
+    <!-- 23:00 local time, weekdays only (markets closed on weekends).
+         Fires late deliberately: some Alpha Vantage series (SPX and other
+         indexes in particular) are not refreshed until late in the day, so
+         an earlier run would miss them. The downstream Wyckoff precompute
+         fires at 23:30, picking up the fresh bars this job writes. -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>23</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>23</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>23</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>23</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>23</integer><key>Minute</key><integer>0</integer></dict>
+    </array>
+
+    <!-- Do not run immediately on load; wait for the next scheduled fire. -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <!-- launchd-level stdout/stderr. The script also keeps its own rolling
+         logs/daily_update.log + .err with dated banners; these capture
+         anything that escapes before the script's logging is set up. -->
+    <key>StandardOutPath</key>
+    <string>/Users/jhenry/Workspaces/GitHub/MarketAnalysis/logs/launchd_daily_update.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/jhenry/Workspaces/GitHub/MarketAnalysis/logs/launchd_daily_update.err</string>
+
+    <!-- Sparse default launchd PATH; include Homebrew so any shell-outs
+         resolve. The job needs network access for the Alpha Vantage API. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+</dict>
+</plist>
