@@ -27,15 +27,21 @@ SEED_INDEXES: list[MarketIndex] = [
         symbol="SPX",
         name="S&P 500 Index",
         category="broad_market",
-        fetch_symbol="SPX",
-        description="500 large-cap US equities.  Fetched directly via AV INDEX_DATA.",
+        proxy_symbol="SPY",
+        description=(
+            "500 large-cap US equities.  Tracked via the SPY ETF proxy — "
+            "AV INDEX_DATA is premium-gated on the current plan."
+        ),
     ),
     MarketIndex(
         symbol="NDX",
         name="NASDAQ-100 Index",
         category="broad_market",
-        fetch_symbol="NDX",
-        description="100 largest non-financial NASDAQ companies.  AV INDEX_DATA.",
+        proxy_symbol="QQQ",
+        description=(
+            "100 largest non-financial NASDAQ companies.  Tracked via the "
+            "QQQ ETF proxy — AV INDEX_DATA is premium-gated on the current plan."
+        ),
     ),
     MarketIndex(
         symbol="DJI",
@@ -80,11 +86,12 @@ def run() -> dict[str, list[str]]:
             inserted.append(idx.symbol)
             continue
         existed.append(idx.symbol)
-        # One-shot migration: pre-v1.0 seeds stored SPX/NDX/DJI in
-        # proxy mode.  The new seed has them in direct mode (AV
-        # INDEX_DATA).  Flip any stale row to match the current seed,
-        # clearing the opposite field so the MarketIndex validator is
-        # happy on next load.  Clears stale error state too.
+        # One-shot migration: reconcile an existing row's mode with the
+        # current seed.  SPX/NDX are proxy mode (SPY/QQQ) because AV
+        # INDEX_DATA is premium-gated; DJI/VIX remain direct.  Flip any
+        # stale row to match the current seed, clearing the opposite
+        # field so the MarketIndex validator is happy on next load.
+        # Clears stale error state too.
         current = coll.find_one({"symbol": idx.symbol}, projection={
             "proxy_symbol": 1, "fetch_symbol": 1, "_id": 0,
         })
@@ -119,7 +126,7 @@ def main() -> int:
     for name in result["existed"]:
         print(f"  existed    {name}")
     for name in result.get("migrated", []):
-        print(f"  migrated   {name}  (proxy → direct INDEX_DATA)")
+        print(f"  migrated   {name}  (mode reconciled to current seed)")
     return 0
 
 
