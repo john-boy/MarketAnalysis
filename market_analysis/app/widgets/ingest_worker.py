@@ -249,6 +249,65 @@ class ETFIngestWorker(_BaseWorker):
         self._inner.run()
 
 
+class SymbolReloadWorker(_BaseWorker):
+    """Full delete-and-reload of a single symbol's price history + indicators.
+
+    Use after a stock split (or any corporate action) that retroactively
+    changes the adjusted series: the incremental daily path only appends
+    new bars, so the *historical* adjusted OHLCV goes stale until the
+    whole series is re-pulled.  This re-fetches the complete
+    split-adjusted history from Alpha Vantage (``TIME_SERIES_DAILY_ADJUSTED``
+    with ``outputsize=full``), replacing every stored bar, then recomputes
+    all indicators from scratch.
+
+    Unlike :class:`FullRefreshWorker`, this operates on one symbol only —
+    it does not touch ETF profiles or holdings.
+    """
+
+    def __init__(self, symbol: str, *, cache: bool = False) -> None:
+        super().__init__()
+        self._symbol = symbol.upper()
+        self._cache = cache
+
+    def _run_inner(self) -> None:
+        sym = self._symbol
+        if not is_tradeable_symbol(sym):
+            msg = f"{sym} is not a tradeable symbol."
+            self.log.emit(f"ERROR: {msg}")
+            self.done.emit(False, msg)
+            return
+
+        av = AlphaVantageClient(cache=self._cache)
+
+        self.log.emit(f"[Reload] [1/2] Re-fetching full price history for {sym}…")
+        try:
+            pr = price_ingestor.ingest_prices(sym, client=av, mode="full")
+        except AlphaVantageError as e:
+            self.log.emit(f"  AV error: {e}")
+            self.done.emit(False, str(e))
+            return
+        first = pr.first_date.date() if pr.first_date else "-"
+        last = pr.last_date.date() if pr.last_date else "-"
+        self.log.emit(
+            f"  {sym}: {pr.inserted:,} bars reloaded ({first} → {last})"
+        )
+
+        self.log.emit(f"[Reload] [2/2] Recomputing indicators for {sym}…")
+        try:
+            ir = ind_svc.recompute_for_symbol(sym, mode="full")
+        except Exception as e:  # noqa: BLE001
+            self.log.emit(f"  indicator error: {e}")
+            self.done.emit(False, f"prices reloaded but indicators failed: {e}")
+            return
+        counts = ", ".join(f"{k}={v}" for k, v in ir.counts.items())
+        self.log.emit(f"  {sym}: {ir.quotes_read:,} quotes → {counts}")
+
+        self.done.emit(
+            True,
+            f"{sym}: {pr.inserted:,} bars reloaded ({first} → {last})",
+        )
+
+
 class FundamentalsWorker(_BaseWorker):
     """Fetch + upsert Alpha Vantage OVERVIEW fundamentals for one symbol."""
 

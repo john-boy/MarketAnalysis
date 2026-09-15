@@ -36,7 +36,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from market_analysis.app.widgets.ingest_worker import FundamentalsWorker
+from market_analysis.app.widgets.ingest_worker import (
+    FundamentalsWorker,
+    SymbolReloadWorker,
+)
 from market_analysis.services import queries
 from market_analysis.services.ingestors import etf as etf_ingestor
 
@@ -87,6 +90,10 @@ class CompanyTab(QWidget):
         # Fundamentals worker state.
         self._fund_thread: QThread | None = None
         self._fund_worker: FundamentalsWorker | None = None
+        # Full-history reload worker state (post-split repair).
+        self._reload_thread: QThread | None = None
+        self._reload_worker: SymbolReloadWorker | None = None
+        self._reloading_symbol: str | None = None
         # Labels for each fundamentals section — reused so refreshes
         # just mutate text instead of tearing down layouts.
         self._section_labels: dict[str, list[QLabel]] = {}
@@ -135,6 +142,14 @@ class CompanyTab(QWidget):
         font.setBold(True)
         self._symbol_lbl.setFont(font)
         self._range_lbl = QLabel("")
+        self._reload_btn = QPushButton("Reload history…")
+        self._reload_btn.setToolTip(
+            "Re-fetch this symbol's entire split-adjusted price history and "
+            "recompute all indicators. Use after a stock split (e.g. CRWD), "
+            "when the daily incremental update leaves historical bars stale."
+        )
+        self._reload_btn.setEnabled(False)
+        self._reload_btn.clicked.connect(self._on_reload_clicked)
         self._delete_btn = QPushButton("Delete symbol…")
         self._delete_btn.setToolTip(
             "Permanently remove this company and all its price history + indicators. "
@@ -145,6 +160,7 @@ class CompanyTab(QWidget):
         header.addWidget(self._symbol_lbl)
         header.addStretch(1)
         header.addWidget(self._range_lbl)
+        header.addWidget(self._reload_btn)
         header.addWidget(self._delete_btn)
         layout.addLayout(header)
 
@@ -376,13 +392,76 @@ class CompanyTab(QWidget):
         self._current_symbol = None
         self._symbol_lbl.setText("—")
         self._delete_btn.setEnabled(False)
+        self._reload_btn.setEnabled(False)
         self.refresh_symbols()
         self._apply_filter(self._filter.text())
+
+    def _on_reload_clicked(self) -> None:
+        sym = self._current_symbol
+        if not sym or self._reload_thread is not None:
+            return
+
+        resp = QMessageBox.question(
+            self,
+            "Reload history",
+            f"Re-fetch {sym}'s entire price history?\n\n"
+            f"This deletes all stored bars for {sym} and re-pulls the full "
+            f"split-adjusted series from Alpha Vantage, then recomputes every "
+            f"indicator. Use this after a stock split, when the daily update "
+            f"has left the historical bars stale.\n\n"
+            f"The chart will refresh when the reload completes.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if resp != QMessageBox.StandardButton.Yes:
+            return
+
+        # Disable both actions while the reload runs; guard against
+        # deleting or re-triggering mid-flight.
+        self._reload_btn.setEnabled(False)
+        self._delete_btn.setEnabled(False)
+        self._range_lbl.setText("reloading…")
+
+        self._reloading_symbol = sym
+        self._reload_thread = QThread(self)
+        self._reload_worker = SymbolReloadWorker(sym, cache=False)
+        self._reload_worker.moveToThread(self._reload_thread)
+        self._reload_thread.started.connect(self._reload_worker.run)
+        self._reload_worker.done.connect(self._on_reload_done)
+        self._reload_thread.start()
+
+    def _on_reload_done(self, success: bool, summary: str) -> None:
+        reloaded = self._reloading_symbol
+        if self._reload_thread is not None:
+            self._reload_thread.quit()
+            self._reload_thread.wait()
+        self._reload_thread = None
+        self._reload_worker = None
+        self._reloading_symbol = None
+
+        # Re-enable actions for whatever symbol is currently selected.
+        has_symbol = self._current_symbol is not None
+        self._reload_btn.setEnabled(has_symbol)
+        self._delete_btn.setEnabled(has_symbol)
+        self._range_lbl.setText("")
+
+        if not success:
+            QMessageBox.critical(
+                self, "Reload failed", f"{reloaded or ''}: {summary}".strip(": ")
+            )
+            return
+
+        QMessageBox.information(self, "History reloaded", summary)
+        # Redraw only if the reloaded symbol is still the one on screen.
+        if reloaded is not None and self._current_symbol == reloaded:
+            self._load(reloaded)
 
     def _load(self, symbol: str) -> None:
         self._current_symbol = symbol
         self._symbol_lbl.setText(symbol)
         self._delete_btn.setEnabled(True)
+        # Don't re-enable reload while a reload for another symbol is running.
+        self._reload_btn.setEnabled(self._reload_thread is None)
 
         # Cache series so redraws don't re-hit Mongo.
         self._quotes = queries.load_quotes(symbol)
